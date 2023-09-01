@@ -217,15 +217,17 @@ function createPool(id: string, token0Id: string, token1Id: string) {
   return pool;
 }
 
-async function syncTokens(ctx: BlockHandlerContext<unknown>, tokens: Token[]) {
+async function syncTokens(ctx: BlockHandlerContext<Store>, tokens: Token[]) {
   const ids = tokens.map((t) => t.id);
 
   const [symbols, names, totalSupplies, decimals] = await Promise.all([
     fetchTokensSymbol(ctx, ids),
     fetchTokensName(ctx, ids),
     fetchTokensTotalSupply(ctx, ids),
+
     fetchTokensDecimals(ctx, ids),
   ]);
+  ctx.log.info(ids);
 
   for (const token of tokens) {
     token.symbol = assertNotNull(symbols.get(token.id));

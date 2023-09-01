@@ -16,8 +16,8 @@ import * as positionsAbi from "./abi/NonfungiblePositionManager";
 
 export const processor = new EvmBatchProcessor()
   .setDataSource({
-    archive: lookupArchive("eth-mainnet"),
-    chain: "https://rpc.ankr.com/eth",
+    archive: lookupArchive("optimism-mainnet"),
+    chain: "https://rpc.ankr.com/optimism/",
   })
   .setFinalityConfirmation(75)
   .addLog({
@@ -58,7 +58,7 @@ export const processor = new EvmBatchProcessor()
     },
   })
   .setBlockRange({
-    from: 60000000,
+    from: 58896456,
   });
 
 export type Fields = EvmBatchProcessorFields<typeof processor>;

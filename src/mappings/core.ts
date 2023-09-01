@@ -65,7 +65,7 @@ type EventData =
   | (BurnData & { type: "Burn" })
   | (SwapData & { type: "Swap" });
 
-type ContextWithEntityManager = CommonHandlerContext<unknown> & {
+type ContextWithEntityManager = DataHandlerContext<Store> & {
   entities: EntityManager;
 };
 
@@ -75,6 +75,7 @@ export async function processPairs(
 ): Promise<void> {
   let eventsData = processItems(ctx, blocks);
   if (!eventsData || eventsData.size == 0) return;
+  console.log("processPairs", eventsData);
 
   await prefetch(ctx, eventsData);
 
@@ -1161,7 +1162,7 @@ export async function handleFlash(
 }
 
 async function updateTickFeeVars(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   ticks: Tick[]
 ): Promise<void> {
   // not all ticks are initialized so obtaining null is expected behavior
@@ -1182,7 +1183,7 @@ async function updateTickFeeVars(
 }
 
 async function updatePoolFeeVars(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   pools: Pool[]
 ): Promise<void> {
   let multicall = new Multicall(ctx, MULTICALL_ADDRESS);

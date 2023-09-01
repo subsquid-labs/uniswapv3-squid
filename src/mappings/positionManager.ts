@@ -26,6 +26,7 @@ import * as factoryAbi from "./../abi/factory";
 import * as positionsAbi from "./../abi/NonfungiblePositionManager";
 import { BlockData, DataHandlerContext } from "@subsquid/evm-processor";
 import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
+import { Store } from "@subsquid/typeorm-store";
 
 type EventData =
   | (TransferData & { type: "Transfer" })
@@ -33,7 +34,7 @@ type EventData =
   | (DecreaseData & { type: "Decrease" })
   | (CollectData & { type: "Collect" });
 
-type ContextWithEntityManager = DataHandlerContext<unknown> & {
+type ContextWithEntityManager = DataHandlerContext<Store> & {
   entities: EntityManager;
 };
 
@@ -285,7 +286,7 @@ function createPosition(positionId: string) {
   return position;
 }
 
-async function initPositions(ctx: BlockHandlerContext<unknown>, ids: string[]) {
+async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
   const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
 
   const positionResults = await multicall.tryAggregate(
@@ -342,7 +343,7 @@ async function initPositions(ctx: BlockHandlerContext<unknown>, ids: string[]) {
 }
 
 async function updateFeeVars(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   positions: Position[]
 ) {
   const multicall = new Multicall(ctx, MULTICALL_ADDRESS);

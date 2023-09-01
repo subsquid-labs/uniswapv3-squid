@@ -7,9 +7,10 @@ import { Multicall } from "../abi/multicall";
 import { MULTICALL_ADDRESS } from "./constants";
 import { StaticTokenDefinition } from "./staticTokenDefinition";
 import { removeNullBytes } from "./tools";
+import { Store } from "@subsquid/typeorm-store";
 
 export async function fetchTokensSymbol(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
   const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
@@ -25,7 +26,7 @@ export async function fetchTokensSymbol(
     const address = tokenAddresses[i];
     let sym: string | undefined;
     if (res.success) {
-      sym = res.value;
+      sym = String(res.value);
     } else if (res.returnData) {
       sym = ERC20SymbolBytes.functions.symbol.tryDecodeResult(res.returnData);
     }
@@ -42,7 +43,7 @@ export async function fetchTokensSymbol(
 }
 
 export async function fetchTokensName(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
   const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
@@ -58,7 +59,7 @@ export async function fetchTokensName(
     const address = tokenAddresses[i];
     let name: string | undefined;
     if (res.success) {
-      name = res.value;
+      name = String(res.value);
     } else if (res.returnData) {
       name = ERC20NameBytes.functions.name.tryDecodeResult(res.returnData);
     }
@@ -75,9 +76,10 @@ export async function fetchTokensName(
 }
 
 export async function fetchTokensTotalSupply(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
+  //tokenAddresses = ["0x7F5c764cBc14f9669B88837ca1490cCa17c31607"];
   let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
 
   let results = await multicall.tryAggregate(
@@ -88,14 +90,14 @@ export async function fetchTokensTotalSupply(
   return new Map(
     results.map((res, i) => {
       let address = tokenAddresses[i];
-      let supply = res.success ? res.value : 0n;
+      let supply = res.success ? BigInt(res.value) : 0n;
       return [address, supply];
     })
   );
 }
 
 export async function fetchTokensDecimals(
-  ctx: BlockHandlerContext<unknown>,
+  ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
   let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
@@ -107,6 +109,7 @@ export async function fetchTokensDecimals(
 
   return new Map(
     results.map((res, i) => {
+      i = Number(i);
       let address = tokenAddresses[i];
       let decimals = res.success ? res.value : 0;
       return [address, decimals];
