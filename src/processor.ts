@@ -58,7 +58,7 @@ export const processor = new EvmBatchProcessor()
     },
   })
   .setBlockRange({
-    from: 58896456,
+    from: 15000000,
   });
 
 export type Fields = EvmBatchProcessorFields<typeof processor>;
