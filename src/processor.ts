@@ -16,8 +16,8 @@ import * as positionsAbi from "./abi/NonfungiblePositionManager";
 
 export const processor = new EvmBatchProcessor()
   .setDataSource({
-    archive: lookupArchive("optimism-mainnet"),
-    chain: "https://rpc.ankr.com/optimism/",
+    archive: lookupArchive("eth-mainnet"),
+    chain: "https://rpc.ankr.com/eth/",
   })
   .setFinalityConfirmation(75)
   .addLog({

@@ -52,6 +52,7 @@ export async function processFactory(
   if (!bundle) {
     bundle = createBundle("1");
     ctx.entities.add(bundle);
+    ctx.store.save(bundle);
   }
 
   let factory = await ctx.entities.get(Factory, FACTORY_ADDRESS);
@@ -98,6 +99,7 @@ export async function processFactory(
 
   await ctx.store.save(bundle);
   await ctx.store.save(factory);
+
   await ctx.store.save(ctx.entities.values(Token));
   await ctx.store.save(ctx.entities.values(Pool));
 }
