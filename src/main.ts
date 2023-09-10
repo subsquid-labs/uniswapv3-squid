@@ -38,6 +38,7 @@ processor.run(new TypeormDatabase(), async (ctx) => {
 
   await processFactory(entitiesCtx, ctx.blocks);
   await processPairs(entitiesCtx, ctx.blocks);
+
   await processPositions(entitiesCtx, ctx.blocks);
 
   await ctx.store.save(entities.values(Bundle));

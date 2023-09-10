@@ -21,7 +21,7 @@ export function createTick(
   tick.liquidityProviderCount = 0n;
 
   // 1.0001^tick is token1/token0.
-  let price0 = Math.pow(1.0001, tickIdx);
+  let price0 = Number(1.0001) ** Number(tickIdx);
   tick.price0 = price0;
   tick.price1 = safeDiv(1, price0);
 
@@ -41,6 +41,7 @@ export function createTick(
 }
 
 export function feeTierToTickSpacing(feeTier: number): number {
+  feeTier = Number(feeTier);
   if (feeTier === 10000) {
     return 200;
   }
@@ -53,6 +54,7 @@ export function feeTierToTickSpacing(feeTier: number): number {
   if (feeTier === 100) {
     return 1;
   }
+  console.log("Unexpected fee tier", feeTier);
 
   throw Error("Unexpected fee tier");
 }

@@ -51,7 +51,10 @@ export function sqrtPriceX96ToTokenPrices(
   let num = sqrtPriceX96 ** 2n;
   let denom = BigInt(Q192);
 
-  let price1 = BigDecimal(num / denom, decimals1 - decimals0).toNumber();
+  let price1 = BigDecimal(
+    num / denom,
+    BigInt(decimals1) - BigInt(decimals0)
+  ).toNumber();
 
   let price0 = safeDiv(1, price1);
   return [price0, price1];

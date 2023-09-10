@@ -73,14 +73,17 @@ export async function processPairs(
   ctx: ContextWithEntityManager,
   blocks: BlockData[]
 ): Promise<void> {
+  //console.log("processPairs");
   let eventsData = processItems(ctx, blocks);
+  //console.log("processPairs", eventsData);
   if (!eventsData || eventsData.size == 0) return;
-  console.log("processPairs", eventsData);
 
   await prefetch(ctx, eventsData);
 
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let factory = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
+  let bundle = await ctx.store.findOne(Bundle, { where: { id: "1" } });
+  let factory = await ctx.store.findOne(Factory, {
+    where: { id: FACTORY_ADDRESS },
+  });
 
   for (let [block, blockEventsData] of eventsData) {
     for (let data of blockEventsData) {
@@ -219,6 +222,7 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
         data: log.data,
         topics: log.topics,
       };
+      //console.log("evmLog", log.topics[0]);
       switch (log.topics[0]) {
         case poolAbi.events.Initialize.topic: {
           let data = processInitialize(evmLog);
@@ -226,7 +230,7 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
             type: "Initialize",
             ...data,
           });
-          return;
+          break;
         }
         case poolAbi.events.Mint.topic: {
           if (log.transaction != undefined) {
@@ -235,16 +239,18 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
               type: "Mint",
               ...data,
             });
-            return;
           }
+          break;
         }
         case poolAbi.events.Burn.topic: {
+          //console.log("Burn");
+          //console.log("log.transaction", log.topics[0]);
           let data = processBurn(evmLog, log.transaction);
           eventsData.push(block.header, {
             type: "Burn",
             ...data,
           });
-          return;
+          break;
         }
         case poolAbi.events.Swap.topic: {
           let data = processSwap(evmLog, log.transaction);
@@ -252,12 +258,12 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
             type: "Swap",
             ...data,
           });
-          return;
+          break;
         }
       }
     }
   }
-
+  console.log("eventsData", eventsData);
   return eventsData;
 }
 
@@ -588,8 +594,10 @@ async function processSwapData(
   );
   let amountTotalUSDUntracked = (amount0USD + amount1USD) / 2;
 
-  let feesETH = (amountTotalETHTracked * pool.feeTier) / 1000000;
-  let feesUSD = (amountTotalUSDTracked * pool.feeTier) / 1000000;
+  let feesETH =
+    (Number(amountTotalETHTracked) * Number(pool.feeTier)) / 1000000;
+  let feesUSD =
+    (Number(amountTotalUSDTracked) * Number(pool.feeTier)) / 1000000;
 
   // global updates
   factory.txCount++;
@@ -744,7 +752,7 @@ async function processSwapData(
   // Update inner vars of current or crossed ticks
   let newTick = pool.tick;
   let tickSpacing = feeTierToTickSpacing(pool.feeTier);
-  let modulo = Math.floor(newTick / tickSpacing);
+  let modulo = Math.floor(Number(newTick) / Number(tickSpacing));
   if (modulo == 0) {
     let tick = createTick(tickId(pool.id, newTick), newTick, pool.id);
     tick.createdAtBlockNumber = block.height;

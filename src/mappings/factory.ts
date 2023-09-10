@@ -44,6 +44,7 @@ export async function processFactory(
   blocks: BlockData[]
 ): Promise<void> {
   const newPairsData = await processItems(ctx, blocks);
+  // console.log("newPairsData", newPairsData);
   if (newPairsData.size == 0) return;
 
   await prefetch(ctx, newPairsData);
@@ -65,6 +66,7 @@ export async function processFactory(
 
   for (const [block, blockEventsData] of newPairsData) {
     for (const data of blockEventsData) {
+      //console.log("data", data);
       const pool = createPool(data.poolId, data.token0Id, data.token1Id);
       pool.feeTier = data.fee;
       pool.createdAtTimestamp = new Date(block.timestamp);
@@ -101,7 +103,9 @@ export async function processFactory(
   await ctx.store.save(factory);
 
   await ctx.store.save(ctx.entities.values(Token));
+  //console.log("ctx.entities.values(Token)", ctx.entities.values(Token));
   await ctx.store.save(ctx.entities.values(Pool));
+  //console.log(ctx.entities.values(Pool));
 }
 
 async function prefetch(
@@ -229,7 +233,7 @@ async function syncTokens(ctx: BlockHandlerContext<Store>, tokens: Token[]) {
 
     fetchTokensDecimals(ctx, ids),
   ]);
-  ctx.log.info(ids);
+  //ctx.log.info(ids);
 
   for (const token of tokens) {
     token.symbol = assertNotNull(symbols.get(token.id));
