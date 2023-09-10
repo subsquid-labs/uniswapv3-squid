@@ -263,7 +263,7 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
       }
     }
   }
-  console.log("eventsData", eventsData);
+  //.log("eventsData", eventsData);
   return eventsData;
 }
 
