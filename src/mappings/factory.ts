@@ -16,7 +16,7 @@ import { Bundle, Factory, Pool, Token } from "../model";
 import { BlockMap } from "../utils/blockMap";
 import { ADDRESS_ZERO, FACTORY_ADDRESS } from "../utils/constants";
 import { EntityManager } from "../utils/entityManager";
-import { WHITELIST_TOKENS } from "../utils/pricing";
+import { USDC_WETH_03_POOL, WHITELIST_TOKENS } from "../utils/pricing";
 import {
   fetchTokensDecimals,
   fetchTokensName,
