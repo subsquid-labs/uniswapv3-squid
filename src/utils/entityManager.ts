@@ -1,7 +1,9 @@
 import { assertNotNull, DataHandlerContext } from "@subsquid/evm-processor";
-import { Store } from "@subsquid/typeorm-store";
+//import { Store } from "@subsquid/typeorm-store";
+import { Store } from "../customStore";
 import { In } from "typeorm";
 import { splitIntoBatches } from "./tools";
+import { Tables } from "../customDB";
 
 export interface EntityClass<T extends Entity> {
   new (): T;
@@ -11,11 +13,11 @@ export interface Entity {
   id: string;
 }
 
-export class EntityManager {
+export class EntityManager<T extends Tables> {
   private deferredIds = new Map<EntityClass<Entity>, Set<string>>();
   private cache = new Map<EntityClass<any>, Map<string, any>>();
 
-  constructor(private store: Store) {}
+  constructor(private store: Store<T>) {}
 
   defer<T extends Entity>(entity: EntityClass<T>, ...ids: string[]) {
     let set = this.deferredIds.get(entity);

@@ -3,7 +3,7 @@ import { DataHandlerContext, assertNotNull } from "@subsquid/evm-processor";
 import { Store, TypeormDatabase } from "@subsquid/typeorm-store";
 import * as factoryAbi from "./abi/factory";
 import * as poolAbi from "./abi/pool";
-
+import { CustomDatabase } from "./customDB";
 import { Block, Fields, Log, Transaction, processor } from "./processor";
 import { EntityManager } from "./utils/entityManager";
 import { processFactory } from "./mappings/factory";
@@ -28,17 +28,19 @@ import {
   Tx,
   UniswapDayData,
 } from "./model";
+import { dbOptions } from "./tables";
 import { TransactionItem } from "./utils/interfaces/interfaces";
 import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
 let factoryPools: Set<string>;
-
-processor.run(new TypeormDatabase(), async (ctx) => {
+let db = new CustomDatabase(dbOptions);
+processor.run(db, async (ctx) => {
   const entities = new EntityManager(ctx.store);
   const entitiesCtx = { ...ctx, entities };
-
+  //@ts-ignore
   await processFactory(entitiesCtx, ctx.blocks);
+  //@ts-ignore
   await processPairs(entitiesCtx, ctx.blocks);
-
+  //@ts-ignore
   await processPositions(entitiesCtx, ctx.blocks);
 
   await ctx.store.save(entities.values(Bundle));
@@ -46,6 +48,7 @@ processor.run(new TypeormDatabase(), async (ctx) => {
   await ctx.store.save(entities.values(Token));
   await ctx.store.save(entities.values(Pool));
   await ctx.store.save(entities.values(Tick));
+  await ctx.store.data.CreateFactoryTable.writeMany(entities.values(Tick));
   await ctx.store.insert(entities.values(Tx));
   await ctx.store.insert(entities.values(Mint));
   await ctx.store.insert(entities.values(Burn));

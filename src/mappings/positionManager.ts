@@ -27,6 +27,7 @@ import * as positionsAbi from "./../abi/NonfungiblePositionManager";
 import { BlockData, DataHandlerContext } from "@subsquid/evm-processor";
 import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
 import { Store } from "@subsquid/typeorm-store";
+import { Tables } from "../customDB";
 
 type EventData =
   | (TransferData & { type: "Transfer" })
@@ -34,12 +35,12 @@ type EventData =
   | (DecreaseData & { type: "Decrease" })
   | (CollectData & { type: "Collect" });
 
-type ContextWithEntityManager = DataHandlerContext<Store> & {
-  entities: EntityManager;
+type ContextWithEntityManager<T extends Tables> = DataHandlerContext<Store> & {
+  entities: EntityManager<T>;
 };
 
-export async function processPositions(
-  ctx: ContextWithEntityManager,
+export async function processPositions<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   blocks: BlockData[]
 ): Promise<void> {
   const eventsData = processItems(ctx, blocks);
@@ -69,8 +70,8 @@ export async function processPositions(
   // await updateFeeVars(createContext(last(blocks).header), ctx.entities.values(Position))
 }
 
-async function prefetch(
-  ctx: ContextWithEntityManager,
+async function prefetch<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   eventsData: BlockMap<EventData>,
   block: BlockHeader
 ) {
@@ -154,8 +155,8 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
   return eventsData;
 }
 
-async function processIncreaseData(
-  ctx: ContextWithEntityManager,
+async function processIncreaseData<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   block: BlockHeader,
   data: IncreaseData
 ) {
@@ -177,8 +178,8 @@ async function processIncreaseData(
   updatePositionSnapshot(ctx, block, position.id);
 }
 
-async function processDecreaseData(
-  ctx: ContextWithEntityManager,
+async function processDecreaseData<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   block: BlockHeader,
   data: DecreaseData
 ) {
@@ -203,8 +204,8 @@ async function processDecreaseData(
   updatePositionSnapshot(ctx, block, position.id);
 }
 
-async function processCollectData(
-  ctx: ContextWithEntityManager,
+async function processCollectData<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   block: BlockHeader,
   data: CollectData
 ) {
@@ -223,8 +224,8 @@ async function processCollectData(
   updatePositionSnapshot(ctx, block, position.id);
 }
 
-async function processTransferData(
-  ctx: ContextWithEntityManager,
+async function processTransferData<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   block: BlockHeader,
   data: TransferData
 ) {
@@ -238,8 +239,8 @@ async function processTransferData(
   updatePositionSnapshot(ctx, block, position.id);
 }
 
-async function updatePositionSnapshot(
-  ctx: ContextWithEntityManager,
+async function updatePositionSnapshot<T extends Tables>(
+  ctx: ContextWithEntityManager<T>,
   block: BlockHeader,
   positionId: string
 ) {
