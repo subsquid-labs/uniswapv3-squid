@@ -1,11 +1,13 @@
 import { Database } from "@subsquid/file-store";
-import { S3Dest } from "@subsquid/file-store-s3";
+import { Dest } from "@subsquid/file-store";
+
 import {
   Column,
   Table,
   Compression,
   Types,
 } from "@subsquid/file-store-parquet";
+import { S3Dest } from "@subsquid/file-store-s3";
 
 export const dbOptions = {
   tables: {
@@ -538,7 +540,7 @@ export const dbOptions = {
   },
   dest: new S3Dest(
     "./",
-    "uniswapV3-data-v1", //assertNotNull(process.env.S3_BUCKET_NAME),
+    "parquet-test", //assertNotNull(process.env.S3_BUCKET_NAME),
     {
       region: "us-east-1",
 

@@ -61,7 +61,7 @@ type ToStoreWriter<W extends TableWriter<any>> = Pick<W, "write" | "writeMany">;
  * Restricted version of TypeORM entity manager for squid data handlers.
  */
 export class Store<T extends Tables> {
-  readonly data: {
+  data: {
     [k in keyof T]: ToStoreWriter<DataBuffer<T>[k]>;
   };
   constructor(

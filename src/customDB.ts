@@ -1,6 +1,5 @@
 import { IsolationLevel } from "@subsquid/typeorm-store";
 import { createOrmConfig } from "@subsquid/typeorm-config";
-import { createFolderName, isFolderName } from "@subsquid/file-store/src/util";
 import {
   DatabaseState,
   FinalTxInfo,
@@ -11,7 +10,8 @@ import { DataSource, EntityManager } from "typeorm";
 import { Table, Dest, TableWriter, DatabaseHooks } from "@subsquid/file-store";
 import assert from "assert";
 import { assertNotNull } from "@subsquid/evm-processor";
-import { ChangeTracker, rollbackBlock } from "@subsquid/typeorm-store/src/hot";
+import { ChangeTracker, rollbackBlock } from "@subsquid/typeorm-store/lib/hot";
+import { S3Dest } from "@subsquid/file-store-s3";
 export type Database<S> = FinalDatabase<S>;
 export interface FinalDatabase<S> {
   supportsHotBlocks?: false;
@@ -26,7 +26,7 @@ export type DataBuffer<T extends Tables> = {
 interface StoreConstructor<T extends Tables> {
   new (chunk: () => DataBuffer<T>): Store<T>;
 }
-export interface DatabaseOptions<T extends Tables, D extends Dest> {
+export interface DatabaseOptions<T extends Tables, D extends S3Dest> {
   tables: T;
   dest: D;
   chunkSizeMb?: number;
@@ -34,7 +34,7 @@ export interface DatabaseOptions<T extends Tables, D extends Dest> {
   hooks?: DatabaseHooks<D>;
 }
 
-export class CustomDatabase<T extends Tables, D extends Dest>
+export class CustomDatabase<T extends Tables, D extends S3Dest>
   implements FinalDatabase<Store<T>>
 {
   //from orm
@@ -62,19 +62,21 @@ export class CustomDatabase<T extends Tables, D extends Dest>
     //filestore
     this.tables = options.tables;
     this.dest = options.dest;
+
     this.chunkSize = options?.chunkSizeMb ?? 20;
     this.updateInterval = options?.syncIntervalBlocks || Infinity;
     this.hooks = options.hooks || defaultHooks;
-    this.StoreConstructor = Store as any;
 
     for (let name in this.tables) {
       Object.defineProperty(Store.prototype, name, {
         get(this: Store<T>) {
+          this.data[name] = this.chunk()[name];
+          let q = this.chunk()[name];
           return this.chunk()[name];
         },
       });
     }
-    this.StoreConstructor = Store as any;
+    this.StoreConstructor = Store<T> as any;
   }
 
   async connect(): Promise<DatabaseState> {
@@ -394,4 +396,14 @@ function assertChainContinuity(base: HashAndHeight, chain: HashAndHeight[]) {
     assert(b.height === prev.height + 1, "blocks must form a continues chain");
     prev = b;
   }
+}
+export function createFolderName(from: number, to: number) {
+  let name =
+    from.toString().padStart(10, "0") + "-" + to.toString().padStart(10, "0");
+  assert(isFolderName(name));
+  return name;
+}
+
+export function isFolderName(str: string) {
+  return /^(\d+)-(\d+)$/.test(str);
 }

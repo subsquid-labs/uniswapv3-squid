@@ -49,6 +49,7 @@ processor.run(db, async (ctx) => {
   await ctx.store.save(entities.values(Pool));
   await ctx.store.save(entities.values(Tick));
   await ctx.store.data.CreateFactoryTable.writeMany(entities.values(Tick));
+  await ctx.store.data.CreatePoolTable.writeMany(entities.values(Pool));
   await ctx.store.insert(entities.values(Tx));
   await ctx.store.insert(entities.values(Mint));
   await ctx.store.insert(entities.values(Burn));
