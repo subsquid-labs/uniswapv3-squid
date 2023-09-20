@@ -45,11 +45,6 @@ processor.run(dw, async (ctx) => {
   //@ts-ignore
   await processPositions(entitiesCtx, ctx.blocks);
 
-  console.log("TABLES");
-  console.log(dw.db.tables);
-  console.log("TABS");
-  console.log(ctx.store.CreateFactoryTable);
-
   await ctx.store.save(entities.values(Bundle));
   await ctx.store.save(entities.values(Factory));
   await ctx.store.save(entities.values(Token));
