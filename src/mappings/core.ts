@@ -59,19 +59,19 @@ import {
   //Transaction,
 } from "@subsquid/evm-processor/src/interfaces/data";
 import { Transaction } from "../processor";
-import { Tables } from "../wrapper";
+
 type EventData =
   | (InitializeData & { type: "Initialize" })
   | (MintData & { type: "Mint" })
   | (BurnData & { type: "Burn" })
   | (SwapData & { type: "Swap" });
 
-type ContextWithEntityManager<T extends Tables> = DataHandlerContext<Store> & {
-  entities: EntityManager<T>;
+type ContextWithEntityManager = DataHandlerContext<Store> & {
+  entities: EntityManager;
 };
 
-export async function processPairs<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+export async function processPairs(
+  ctx: ContextWithEntityManager,
   blocks: BlockData[]
 ): Promise<void> {
   //console.log("processPairs");
@@ -117,8 +117,8 @@ export async function processPairs<T extends Tables>(
   ]);
 }
 
-async function prefetch<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function prefetch(
+  ctx: ContextWithEntityManager,
   eventsData: BlockMap<EventData>
 ) {
   let dayIds = new Set<number>();
@@ -268,8 +268,8 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
   return eventsData;
 }
 
-async function processInitializeData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function processInitializeData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   data: InitializeData
 ) {
@@ -300,8 +300,8 @@ async function processInitializeData<T extends Tables>(
   await updateTokenHourData(ctx, block, token1.id);
 }
 
-async function processMintData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function processMintData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   data: MintData
 ) {
@@ -432,8 +432,8 @@ async function processMintData<T extends Tables>(
   // await updateTickFeeVarsAndSave(upperTick!, event)
 }
 
-async function processBurnData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function processBurnData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   data: BurnData
 ) {
@@ -552,8 +552,8 @@ async function processBurnData<T extends Tables>(
   // updateTickFeeVarsAndSave(upperTick!, event)
 }
 
-async function processSwapData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function processSwapData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   data: SwapData
 ) {
@@ -762,8 +762,8 @@ async function processSwapData<T extends Tables>(
   }
 }
 
-async function getEthPerToken<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function getEthPerToken(
+  ctx: ContextWithEntityManager,
   tokenId: string
 ): Promise<number> {
   if (tokenId == WETH_ADDRESS) return 1;
@@ -812,8 +812,8 @@ async function getEthPerToken<T extends Tables>(
   return priceSoFar; // nothing was found return 0
 }
 
-async function updateUniswapDayData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updateUniswapDayData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader
 ): Promise<UniswapDayData> {
   let uniswap = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
@@ -832,8 +832,8 @@ async function updateUniswapDayData<T extends Tables>(
   return uniswapDayData;
 }
 
-async function updatePoolDayData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updatePoolDayData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   poolId: string
 ): Promise<PoolDayData> {
@@ -868,8 +868,8 @@ async function updatePoolDayData<T extends Tables>(
   return poolDayData;
 }
 
-async function updatePoolHourData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updatePoolHourData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   poolId: string
 ): Promise<PoolHourData> {
@@ -904,8 +904,8 @@ async function updatePoolHourData<T extends Tables>(
   return poolHourData;
 }
 
-async function updateTokenDayData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updateTokenDayData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   tokenId: string
 ): Promise<TokenDayData> {
@@ -940,8 +940,8 @@ async function updateTokenDayData<T extends Tables>(
   return tokenDayData;
 }
 
-async function updateTokenHourData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updateTokenHourData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   tokenId: string
 ): Promise<TokenHourData> {
@@ -976,8 +976,8 @@ async function updateTokenHourData<T extends Tables>(
   return tokenHourData as TokenHourData;
 }
 
-async function updateTickDayData<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function updateTickDayData(
+  ctx: ContextWithEntityManager,
   block: BlockHeader,
   tickId: string
 ): Promise<TickDayData> {

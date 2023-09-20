@@ -26,7 +26,6 @@ import {
 import { last, processItem } from "../utils/tools";
 import { EvmBlock } from "@subsquid/evm-processor/lib/interfaces/evm";
 import { Store } from "@subsquid/typeorm-store";
-import { Tables } from "../wrapper";
 
 interface PairCreatedData {
   poolId: string;
@@ -35,13 +34,13 @@ interface PairCreatedData {
   fee: number;
 }
 
-type ContextWithEntityManager<T extends Tables> = DataHandlerContext<Store> & {
-  entities: EntityManager<T>;
+type ContextWithEntityManager = DataHandlerContext<Store> & {
+  entities: EntityManager;
 };
 
 // export class FactoryProcessor extends MappingProcessor<Item> {
-export async function processFactory<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+export async function processFactory(
+  ctx: ContextWithEntityManager,
   blocks: BlockData[]
 ): Promise<void> {
   const newPairsData = await processItems(ctx, blocks);
@@ -109,8 +108,8 @@ export async function processFactory<T extends Tables>(
   //console.log(ctx.entities.values(Pool));
 }
 
-async function prefetch<T extends Tables>(
-  ctx: ContextWithEntityManager<T>,
+async function prefetch(
+  ctx: ContextWithEntityManager,
   eventsData: BlockMap<PairCreatedData>
 ) {
   for (const [, blockEventsData] of eventsData) {

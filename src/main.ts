@@ -31,18 +31,18 @@ import {
 import { dbOptions } from "./tables";
 import { TransactionItem } from "./utils/interfaces/interfaces";
 import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
-import { Wrapper } from "./wrapper";
+import { DoubleDB } from "./doubleDB";
 let factoryPools: Set<string>;
 //let db = new CustomDatabase(dbOptions);
-let dw = new Wrapper(dbOptions);
+let dw = new DoubleDB(dbOptions);
 processor.run(dw, async (ctx) => {
   const entities = new EntityManager(ctx.store);
   const entitiesCtx = { ...ctx, entities };
-  //@ts-ignore
+
   await processFactory(entitiesCtx, ctx.blocks);
-  //@ts-ignore
+
   await processPairs(entitiesCtx, ctx.blocks);
-  //@ts-ignore
+
   await processPositions(entitiesCtx, ctx.blocks);
 
   await ctx.store.save(entities.values(Bundle));
