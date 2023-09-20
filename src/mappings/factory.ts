@@ -26,7 +26,7 @@ import {
 import { last, processItem } from "../utils/tools";
 import { EvmBlock } from "@subsquid/evm-processor/lib/interfaces/evm";
 import { Store } from "@subsquid/typeorm-store";
-import { Tables } from "../customDB";
+import { Tables } from "../wrapper";
 
 interface PairCreatedData {
   poolId: string;

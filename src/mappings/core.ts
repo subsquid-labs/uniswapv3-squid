@@ -59,7 +59,7 @@ import {
   //Transaction,
 } from "@subsquid/evm-processor/src/interfaces/data";
 import { Transaction } from "../processor";
-import { Tables } from "../customDB";
+import { Tables } from "../wrapper";
 type EventData =
   | (InitializeData & { type: "Initialize" })
   | (MintData & { type: "Mint" })

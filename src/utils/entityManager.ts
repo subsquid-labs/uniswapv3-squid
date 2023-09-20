@@ -3,7 +3,7 @@ import { assertNotNull, DataHandlerContext } from "@subsquid/evm-processor";
 import { Store } from "../customStore";
 import { In } from "typeorm";
 import { splitIntoBatches } from "./tools";
-import { Tables } from "../customDB";
+import { Tables } from "../wrapper";
 
 export interface EntityClass<T extends Entity> {
   new (): T;

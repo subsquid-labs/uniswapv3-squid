@@ -27,7 +27,7 @@ import * as positionsAbi from "./../abi/NonfungiblePositionManager";
 import { BlockData, DataHandlerContext } from "@subsquid/evm-processor";
 import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
 import { Store } from "@subsquid/typeorm-store";
-import { Tables } from "../customDB";
+import { Tables } from "../wrapper";
 
 type EventData =
   | (TransferData & { type: "Transfer" })

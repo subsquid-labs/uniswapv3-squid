@@ -8,7 +8,7 @@ import {
 import { EntityTarget } from "typeorm/common/EntityTarget";
 import { ColumnMetadata } from "typeorm/metadata/ColumnMetadata";
 import { ChangeTracker } from "@subsquid/typeorm-store/src/hot";
-import { Tables, DataBuffer } from "./customDB";
+import { Tables, DataBuffer } from "./wrapper";
 import { TableWriter } from "@subsquid/file-store";
 export interface EntityClass<T> {
   new (): T;
@@ -41,39 +41,14 @@ export interface FindOneOptions<Entity = any> {
    */
   order?: FindOptionsOrder<Entity>;
 }
-
-export interface FindManyOptions<Entity = any> extends FindOneOptions<Entity> {
-  /**
-   * Offset (paginated) where from entities should be taken.
-   */
-  skip?: number;
-  /**
-   * Limit (paginated) - max number of entities should be taken.
-   */
-  take?: number;
-}
-type ToStoreWriter<W extends TableWriter<any>> = Pick<W, "write" | "writeMany">;
-
-// export type Store<T extends Tables> = Readonly<{
-//   [k in keyof T]: ToStoreWriter<DataBuffer<T>[k]>;
-// }>;
-/**
- * Restricted version of TypeORM entity manager for squid data handlers.
- */
 export class Store<T extends Tables> {
-  data: {
-    [k in keyof T]: ToStoreWriter<DataBuffer<T>[k]>;
-  };
+  //data: Stores<T>;
+
   constructor(
     private em: () => EntityManager,
     protected chunk: () => DataBuffer<T>,
-
     private changes?: ChangeTracker
-  ) {
-    this.data = {} as {
-      [k in keyof T]: ToStoreWriter<DataBuffer<T>[k]>;
-    };
-  }
+  ) {}
 
   /**
    * Alias for {@link Store.upsert}
@@ -301,6 +276,24 @@ export class Store<T extends Tables> {
   }
 }
 
+export interface FindManyOptions<Entity = any> extends FindOneOptions<Entity> {
+  /**
+   * Offset (paginated) where from entities should be taken.
+   */
+  skip?: number;
+  /**
+   * Limit (paginated) - max number of entities should be taken.
+   */
+  take?: number;
+}
+type ToStoreWriter<W extends TableWriter<any>> = Pick<W, "write" | "writeMany">;
+
+// export type Store<T extends Tables> = Readonly<{
+//   [k in keyof T]: ToStoreWriter<DataBuffer<T>[k]>;
+// }>;
+/**
+ * Restricted version of TypeORM entity manager for squid data handlers.
+ */
 function* splitIntoBatches<T>(list: T[], maxBatchSize: number): Generator<T[]> {
   if (list.length <= maxBatchSize) {
     yield list;
