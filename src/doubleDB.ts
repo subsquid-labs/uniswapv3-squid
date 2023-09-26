@@ -46,21 +46,23 @@ export class DoubleDB implements FinalDatabase<S> {
 
   async transact(
     info: FinalTxInfo,
-    cb: (store: DoubleStore<T> | Store<T> | OrmStore) => Promise<void>
+    cb: (store: DoubleStore<T>) => Promise<void>
   ): Promise<void> {
-    const fileStoreCB = async (store: Store<T>): Promise<void> => {
+    const fileStoreCB = async (filestore: Store<T>): Promise<void> => {
       // Now you can use 'store' within the callback function
       // Example: Call a function from 'store'
 
       // Call the original callback function
-      await cb(store);
+      //@ts-ignore
+      await cb(filestore);
     };
-    const ormCB = async (store: OrmStore): Promise<void> => {
+    const ormCB = async (ormStore: OrmStore): Promise<void> => {
       // Now you can use 'store' within the callback function
       // Example: Call a function from 'store'
 
       // Call the original callback function
-      await cb(store);
+      //@ts-ignore
+      await cb(ormStore);
     };
     await this.db.transact(info, fileStoreCB);
     await this.orm.transact(info, ormCB);

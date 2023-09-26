@@ -36,7 +36,7 @@ let factoryPools: Set<string>;
 //let db = new CustomDatabase(dbOptions);
 let dw = new DoubleDB(dbOptions);
 processor.run(dw, async (ctx) => {
-  const entities = new EntityManager(ctx.store);
+  const entities = new EntityManager(ctx.store.typeormstore);
   const entitiesCtx = { ...ctx, entities };
 
   await processFactory(entitiesCtx, ctx.blocks);
@@ -51,8 +51,8 @@ processor.run(dw, async (ctx) => {
   await ctx.store.save(entities.values(Pool));
   await ctx.store.save(entities.values(Tick));
 
-  await ctx.store.CreateFactoryTable.writeMany(entities.values(Tick));
-  await ctx.store.CreatePoolTable.writeMany(entities.values(Pool));
+  await ctx.store.filestore.CreateFactoryTable.writeMany(entities.values(Tick));
+  await ctx.store.filestore.CreatePoolTable.writeMany(entities.values(Pool));
   await ctx.store.insert(entities.values(Tx));
   await ctx.store.insert(entities.values(Mint));
   await ctx.store.insert(entities.values(Burn));
