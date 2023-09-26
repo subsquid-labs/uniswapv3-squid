@@ -1,4 +1,4 @@
-import { Store, Table, TableWriter } from "@subsquid/file-store";
+import { Store as StoreType, Table, TableWriter } from "@subsquid/file-store";
 import { Store as OrmStore } from "@subsquid/typeorm-store";
 import { ChangeTracker } from "@subsquid/typeorm-store/lib/hot";
 import { EntityManager } from "typeorm";
@@ -7,8 +7,9 @@ type Tables = Record<string, Table<any>>;
 export type DataBuffer<T extends Tables> = {
   [k in keyof T]: TableWriter<T[k] extends Table<infer R> ? R : never>;
 };
+
 export class DoubleStore<T extends Tables> {
-  filestore: Store<T>;
+  filestore: StoreType<T>;
   typeormstore: OrmStore;
   constructor(
     private em: () => EntityManager,
@@ -18,12 +19,10 @@ export class DoubleStore<T extends Tables> {
   ) {
     this.typeormstore = new OrmStore(em);
     this.filestore = {} as any;
-    for (let name in names) {
-      Object.defineProperty(this.filestore, name, {
-        get(this: DoubleStore<T>) {
-          return this.chunk()[name];
-        },
-      });
+    class Store {
+      constructor(protected chunk: () => DataBuffer<T>) {}
     }
+
+    this.filestore = Store as any;
   }
 }
