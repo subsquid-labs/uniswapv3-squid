@@ -74,7 +74,8 @@ export async function processPairs(
   blocks: BlockData[]
 ): Promise<void> {
   //console.log("processPairs");
-  let eventsData = processItems(ctx, blocks);
+
+  let eventsData = await processItems(ctx, blocks);
   //console.log("processPairs", eventsData);
   if (!eventsData || eventsData.size == 0) return;
 
@@ -209,7 +210,10 @@ async function prefetch(
   await ctx.entities.load(TokenHourData);
 }
 
-function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
+async function processItems(
+  ctx: ContextWithEntityManager,
+  blocks: BlockData[]
+) {
   let eventsData = new BlockMap<EventData>();
 
   for (let block of blocks) {
@@ -222,43 +226,46 @@ function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
         data: log.data,
         topics: log.topics,
       };
-      //console.log("evmLog", log.topics[0]);
-      switch (log.topics[0]) {
-        case poolAbi.events.Initialize.topic: {
-          let data = processInitialize(evmLog);
-          eventsData.push(block.header, {
-            type: "Initialize",
-            ...data,
-          });
-          break;
-        }
-        case poolAbi.events.Mint.topic: {
-          if (log.transaction != undefined) {
-            let data = processMint(evmLog, log.transaction);
+      let pool = await ctx.entities.get(Pool, log.address);
+      if (pool) {
+        //console.log("evmLog", log.topics[0]);
+        switch (log.topics[0]) {
+          case poolAbi.events.Initialize.topic: {
+            let data = processInitialize(evmLog);
             eventsData.push(block.header, {
-              type: "Mint",
+              type: "Initialize",
               ...data,
             });
+            break;
           }
-          break;
-        }
-        case poolAbi.events.Burn.topic: {
-          //console.log("Burn");
-          //console.log("log.transaction", log.topics[0]);
-          let data = processBurn(evmLog, log.transaction);
-          eventsData.push(block.header, {
-            type: "Burn",
-            ...data,
-          });
-          break;
-        }
-        case poolAbi.events.Swap.topic: {
-          let data = processSwap(evmLog, log.transaction);
-          eventsData.push(block.header, {
-            type: "Swap",
-            ...data,
-          });
-          break;
+          case poolAbi.events.Mint.topic: {
+            if (log.transaction != undefined) {
+              let data = processMint(evmLog, log.transaction);
+              eventsData.push(block.header, {
+                type: "Mint",
+                ...data,
+              });
+            }
+            break;
+          }
+          case poolAbi.events.Burn.topic: {
+            //console.log("Burn");
+            //console.log("log.transaction", log.topics[0]);
+            let data = processBurn(evmLog, log.transaction);
+            eventsData.push(block.header, {
+              type: "Burn",
+              ...data,
+            });
+            break;
+          }
+          case poolAbi.events.Swap.topic: {
+            let data = processSwap(evmLog, log.transaction);
+            eventsData.push(block.header, {
+              type: "Swap",
+              ...data,
+            });
+            break;
+          }
         }
       }
     }

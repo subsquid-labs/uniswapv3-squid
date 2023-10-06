@@ -129,7 +129,10 @@ async function processItems(
 
   for (let block of blocks) {
     for (let log of block.logs) {
-      if (log.topics[0] == factoryAbi.events.PoolCreated.topic) {
+      if (
+        log.topics[0] == factoryAbi.events.PoolCreated.topic &&
+        log.address.toLowerCase() == FACTORY_ADDRESS.toLowerCase()
+      ) {
         const event = factoryAbi.events.PoolCreated.decode(log);
         newPairsData.push(block.header, {
           poolId: event.pool.toLowerCase(),
