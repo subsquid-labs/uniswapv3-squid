@@ -24,7 +24,6 @@ import {
   fetchTokensTotalSupply,
 } from "../utils/token";
 import { last, processItem } from "../utils/tools";
-import { EvmBlock } from "@subsquid/evm-processor/lib/interfaces/evm";
 import { Store } from "@subsquid/typeorm-store";
 
 interface PairCreatedData {

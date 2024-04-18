@@ -1,5 +1,4 @@
 import { BigDecimal } from "@subsquid/big-decimal";
-import { EvmBlock } from "@subsquid/evm-processor/lib/interfaces/evm";
 
 import {
   BatchBlock,
@@ -46,7 +45,7 @@ export async function processPositions(
   if (!eventsData || eventsData.size == 0) return;
 
   await prefetch(ctx, eventsData, last(blocks).header);
-  console.log(eventsData);
+  // console.log(eventsData);
   for (const [block, blockEventsData] of eventsData) {
     for (const data of blockEventsData) {
       switch (data.type) {
@@ -211,8 +210,8 @@ async function processCollectData(
   let position = ctx.entities.get(Position, data.tokenId, false);
   // position was not able to be fetched
   if (position == null) return;
-  console.log("position", position);
-  console.log(data);
+  //console.log("position", position);
+  //console.log(data);
   let token0 = ctx.entities.get(Token, position.token0Id, false);
   if (token0 == null) return;
   let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();

@@ -1,4 +1,4 @@
-import { EvmBlock } from "@subsquid/evm-processor/src/interfaces/evm";
+import { EvmBlockHeader } from "@subsquid/evm-processor/src/interfaces/evm";
 import { BatchBlock } from "./interfaces/interfaces";
 import assert from "assert";
 
@@ -24,7 +24,7 @@ export function removeNullBytes(str: string): string {
 
 export function processItem<I>(
   blocks: BatchBlock<I>[],
-  fn: (block: EvmBlock, item: I) => void
+  fn: (block: EvmBlockHeader, item: I) => void
 ) {
   for (let block of blocks) {
     for (let item of block.items) {

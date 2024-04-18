@@ -1,5 +1,5 @@
 import { BigDecimal } from "@subsquid/big-decimal";
-import { EvmBlock, EvmLog } from "@subsquid/evm-processor/lib/interfaces/evm";
+import { EvmLog } from "@subsquid/evm-processor/lib/interfaces/evm";
 import {
   BatchBlock,
   BlockHandlerContext,

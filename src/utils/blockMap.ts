@@ -1,4 +1,3 @@
-import { EvmBlock } from "@subsquid/evm-processor/src/interfaces/evm";
 import { last } from "./tools";
 import { BlockHeader } from "./interfaces/interfaces";
 export class BlockMap<T> extends Map<BlockHeader, T[]> {

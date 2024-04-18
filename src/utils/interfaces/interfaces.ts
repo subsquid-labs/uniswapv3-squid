@@ -3,7 +3,7 @@ import { Logger } from "@subsquid/logger";
 import { Chain } from "@subsquid/evm-processor/src/interfaces/chain";
 import { LogRequest } from "@subsquid/evm-processor/src/interfaces/data-request";
 import {
-  EvmBlock,
+  EvmBlockHeader,
   EvmLog,
   EvmTransaction,
 } from "@subsquid/evm-processor/src/interfaces/evm";
@@ -20,7 +20,7 @@ export interface BatchBlock<Item> {
   /**
    * Block header
    */
-  header: EvmBlock;
+  header: EvmBlockHeader;
   /**
    * A unified log of events and calls.
    *
@@ -75,7 +75,7 @@ export interface BatchBlock<Item> {
   /**
    * Block header
    */
-  header: EvmBlock;
+  header: EvmBlockHeader;
   /**
    * A unified log of events and calls.
    *
