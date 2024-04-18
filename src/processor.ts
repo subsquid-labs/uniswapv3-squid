@@ -1,5 +1,10 @@
+import fs from 'fs'
 import { lookupArchive } from "@subsquid/archive-registry";
-import { FACTORY_ADDRESS, POSITIONS_ADDRESS } from "./utils/constants";
+import {
+  FACTORY_ADDRESS,
+  FACTORY_DEPLOYED_AT,
+  POSITIONS_ADDRESS
+} from "./utils/constants";
 
 import {
   BlockHeader,
@@ -14,6 +19,8 @@ import * as factoryAbi from "./abi/factory";
 import * as poolAbi from "./abi/pool";
 import * as positionsAbi from "./abi/NonfungiblePositionManager";
 
+const poolsMetadata = JSON.parse(fs.readFileSync("./assets/pools.json", "utf-8")) as { height: number, pools: string[] }
+
 export const processor = new EvmBatchProcessor()
   .setDataSource({
     archive: lookupArchive("eth-mainnet"),
@@ -26,22 +33,34 @@ export const processor = new EvmBatchProcessor()
     transaction: true,
   })
   .addLog({
+    address: poolsMetadata.pools,
     topic0: [
       poolAbi.events.Burn.topic,
       poolAbi.events.Mint.topic,
       poolAbi.events.Initialize.topic,
       poolAbi.events.Swap.topic,
     ],
+    range: {from: FACTORY_DEPLOYED_AT, to: poolsMetadata.height},
     transaction: true,
   })
   .addLog({
+    topic0: [
+      poolAbi.events.Burn.topic,
+      poolAbi.events.Mint.topic,
+      poolAbi.events.Initialize.topic,
+      poolAbi.events.Swap.topic,
+    ],
+    range: {from: poolsMetadata.height+1},
+    transaction: true,
+  })
+  .addLog({
+    address: [POSITIONS_ADDRESS],
     topic0: [
       positionsAbi.events.IncreaseLiquidity.topic,
       positionsAbi.events.DecreaseLiquidity.topic,
       positionsAbi.events.Collect.topic,
       positionsAbi.events.Transfer.topic,
     ],
-    address: [POSITIONS_ADDRESS],
     transaction: true,
   })
   .setFields({
@@ -58,7 +77,7 @@ export const processor = new EvmBatchProcessor()
     },
   })
   .setBlockRange({
-    from: 12000000,
+    from: FACTORY_DEPLOYED_AT,
   });
 
 export type Fields = EvmBatchProcessorFields<typeof processor>;

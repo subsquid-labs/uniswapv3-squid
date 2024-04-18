@@ -83,7 +83,7 @@
       "get-pools": {
         "description": "Updates assets/pools.json with the most recent list of pools",
         "deps": ["build"],
-        "cmd": ["node", "--require=dotenv/config", "lib/tools/poolsRetriever.js"]
+        "cmd": ["node", "--require=dotenv/config", "lib/tools/poolRetriever.ks"]
       }
     }
   }
