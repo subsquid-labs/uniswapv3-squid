@@ -1,5 +1,5 @@
 manifestVersion: subsquid.io/v0.1
-name: uniswap-squid-arrow
+name: uniswapv3-squid
 version: 1
 description: 'The very first evm squid from manifest  '
 build: 
@@ -22,3 +22,10 @@ deploy:
       - '100'
       - '--dumb-cache-max-age'
       - '1000'
+#scale:
+#  dedicated: true
+#  processor:
+#    profile: large
+#  addons:
+#    postgres:
+#      profile: large
