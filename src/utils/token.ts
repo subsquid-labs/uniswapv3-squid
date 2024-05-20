@@ -19,16 +19,17 @@ export async function fetchTokensSymbol(
 
   const results = await multicall.tryAggregate(
     ERC20.functions.symbol,
-    tokenAddresses.map((a) => [a, []])
+    tokenAddresses.map((a) => [a, {}])
   );
 
   results.forEach((res, i) => {
+    console.log(res, tokenAddresses[i])
     const address = tokenAddresses[i];
     let sym: string | undefined;
     if (res.success) {
       sym = String(res.value);
     } else if (res.returnData) {
-      sym = ERC20SymbolBytes.functions.symbol.tryDecodeResult(res.returnData);
+      sym = ERC20SymbolBytes.functions.symbol.decodeResult(res.returnData);
     }
     if (sym) {
       symbols.set(address, removeNullBytes(sym));
@@ -52,7 +53,7 @@ export async function fetchTokensName(
 
   const results = await multicall.tryAggregate(
     ERC20.functions.name,
-    tokenAddresses.map((a) => [a, []])
+    tokenAddresses.map((a) => [a, {}])
   );
 
   results.forEach((res, i) => {
@@ -61,7 +62,7 @@ export async function fetchTokensName(
     if (res.success) {
       name = String(res.value);
     } else if (res.returnData) {
-      name = ERC20NameBytes.functions.name.tryDecodeResult(res.returnData);
+      name = ERC20NameBytes.functions.name.decodeResult(res.returnData);
     }
     if (name) {
       names.set(address, removeNullBytes(name));
@@ -84,7 +85,7 @@ export async function fetchTokensTotalSupply(
 
   let results = await multicall.tryAggregate(
     ERC20.functions.totalSupply,
-    tokenAddresses.map((a) => [a, []])
+    tokenAddresses.map((a) => [a, {}])
   );
 
   return new Map(
@@ -104,7 +105,7 @@ export async function fetchTokensDecimals(
 
   let results = await multicall.tryAggregate(
     ERC20.functions.decimals,
-    tokenAddresses.map((a) => [a, []])
+    tokenAddresses.map((a) => [a, {}])
   );
 
   return new Map(

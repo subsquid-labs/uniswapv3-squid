@@ -294,7 +294,7 @@ async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
     positionsAbi.functions.positions,
     POSITIONS_ADDRESS,
     ids.map((id) => {
-      return [BigInt(id)];
+      return { tokenId: BigInt(id) };
     }),
     500
   );
@@ -321,7 +321,11 @@ async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
     factoryAbi.functions.getPool,
     FACTORY_ADDRESS,
     positionsData.map((p) => {
-      return [p.token0Id, p.token1Id, p.fee];
+      return {
+        tokenA: p.token0Id,
+        tokenB: p.token1Id,
+        fee: p.fee
+      };
     }),
     500
   );
@@ -353,7 +357,7 @@ async function updateFeeVars(
     positionsAbi.functions.positions,
     POSITIONS_ADDRESS,
     positions.map((p) => {
-      return [BigInt(p.id)];
+      return { tokenId: BigInt(p.id) };
     })
   );
 
