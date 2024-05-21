@@ -23,7 +23,6 @@ export async function fetchTokensSymbol(
   );
 
   results.forEach((res, i) => {
-    console.log(res, tokenAddresses[i])
     const address = tokenAddresses[i];
     let sym: string | undefined;
     if (res.success) {
