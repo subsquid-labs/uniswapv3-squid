@@ -1,53 +1,58 @@
-import * as ethers from 'ethers'
-import {LogEvent, Func, ContractBase} from './abi.support'
-import {ABI_JSON} from './factory.abi'
-
-export const abi = new ethers.Interface(ABI_JSON);
+import * as p from '@subsquid/evm-codec'
+import { event, fun, indexed, ContractBase } from '@subsquid/evm-abi'
+import type { EventParams as EParams, FunctionArguments, FunctionReturn } from '@subsquid/evm-abi'
 
 export const events = {
-    FeeAmountEnabled: new LogEvent<([fee: number, tickSpacing: number] & {fee: number, tickSpacing: number})>(
-        abi, '0xc66a3fdf07232cdd185febcc6579d408c241b47ae2f9907d84be655141eeaecc'
-    ),
-    OwnerChanged: new LogEvent<([oldOwner: string, newOwner: string] & {oldOwner: string, newOwner: string})>(
-        abi, '0xb532073b38c83145e3e5135377a08bf9aab55bc0fd7c1179cd4fb995d2a5159c'
-    ),
-    PoolCreated: new LogEvent<([token0: string, token1: string, fee: number, tickSpacing: number, pool: string] & {token0: string, token1: string, fee: number, tickSpacing: number, pool: string})>(
-        abi, '0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118'
-    ),
+    FeeAmountEnabled: event("0xc66a3fdf07232cdd185febcc6579d408c241b47ae2f9907d84be655141eeaecc", {"fee": indexed(p.uint24), "tickSpacing": indexed(p.int24)}),
+    OwnerChanged: event("0xb532073b38c83145e3e5135377a08bf9aab55bc0fd7c1179cd4fb995d2a5159c", {"oldOwner": indexed(p.address), "newOwner": indexed(p.address)}),
+    PoolCreated: event("0x783cca1c0412dd0d695e784568c96da2e9c22ff989357a2e8b1d9b2b4e6b7118", {"token0": indexed(p.address), "token1": indexed(p.address), "fee": indexed(p.uint24), "tickSpacing": p.int24, "pool": p.address}),
 }
 
 export const functions = {
-    createPool: new Func<[tokenA: string, tokenB: string, fee: number], {tokenA: string, tokenB: string, fee: number}, string>(
-        abi, '0xa1671295'
-    ),
-    enableFeeAmount: new Func<[fee: number, tickSpacing: number], {fee: number, tickSpacing: number}, []>(
-        abi, '0x8a7c195f'
-    ),
-    feeAmountTickSpacing: new Func<[fee: number], {fee: number}, number>(
-        abi, '0x22afcccb'
-    ),
-    getPool: new Func<[tokenA: string, tokenB: string, fee: number], {tokenA: string, tokenB: string, fee: number}, string>(
-        abi, '0x1698ee82'
-    ),
-    owner: new Func<[], {}, string>(
-        abi, '0x8da5cb5b'
-    ),
-    setOwner: new Func<[_owner: string], {_owner: string}, []>(
-        abi, '0x13af4035'
-    ),
+    createPool: fun("0xa1671295", {"tokenA": p.address, "tokenB": p.address, "fee": p.uint24}, p.address),
+    enableFeeAmount: fun("0x8a7c195f", {"fee": p.uint24, "tickSpacing": p.int24}, ),
+    feeAmountTickSpacing: fun("0x22afcccb", {"fee": p.uint24}, p.int24),
+    getPool: fun("0x1698ee82", {"tokenA": p.address, "tokenB": p.address, "fee": p.uint24}, p.address),
+    owner: fun("0x8da5cb5b", {}, p.address),
+    setOwner: fun("0x13af4035", {"_owner": p.address}, ),
 }
 
 export class Contract extends ContractBase {
 
-    feeAmountTickSpacing(fee: number): Promise<number> {
-        return this.eth_call(functions.feeAmountTickSpacing, [fee])
+    feeAmountTickSpacing(fee: FeeAmountTickSpacingParams["fee"]) {
+        return this.eth_call(functions.feeAmountTickSpacing, {fee})
     }
 
-    getPool(tokenA: string, tokenB: string, fee: number): Promise<string> {
-        return this.eth_call(functions.getPool, [tokenA, tokenB, fee])
+    getPool(tokenA: GetPoolParams["tokenA"], tokenB: GetPoolParams["tokenB"], fee: GetPoolParams["fee"]) {
+        return this.eth_call(functions.getPool, {tokenA, tokenB, fee})
     }
 
-    owner(): Promise<string> {
-        return this.eth_call(functions.owner, [])
+    owner() {
+        return this.eth_call(functions.owner, {})
     }
 }
+
+/// Event types
+export type FeeAmountEnabledEventArgs = EParams<typeof events.FeeAmountEnabled>
+export type OwnerChangedEventArgs = EParams<typeof events.OwnerChanged>
+export type PoolCreatedEventArgs = EParams<typeof events.PoolCreated>
+
+/// Function types
+export type CreatePoolParams = FunctionArguments<typeof functions.createPool>
+export type CreatePoolReturn = FunctionReturn<typeof functions.createPool>
+
+export type EnableFeeAmountParams = FunctionArguments<typeof functions.enableFeeAmount>
+export type EnableFeeAmountReturn = FunctionReturn<typeof functions.enableFeeAmount>
+
+export type FeeAmountTickSpacingParams = FunctionArguments<typeof functions.feeAmountTickSpacing>
+export type FeeAmountTickSpacingReturn = FunctionReturn<typeof functions.feeAmountTickSpacing>
+
+export type GetPoolParams = FunctionArguments<typeof functions.getPool>
+export type GetPoolReturn = FunctionReturn<typeof functions.getPool>
+
+export type OwnerParams = FunctionArguments<typeof functions.owner>
+export type OwnerReturn = FunctionReturn<typeof functions.owner>
+
+export type SetOwnerParams = FunctionArguments<typeof functions.setOwner>
+export type SetOwnerReturn = FunctionReturn<typeof functions.setOwner>
+

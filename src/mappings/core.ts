@@ -1185,15 +1185,17 @@ async function updateTickFeeVars(
 
   const tickResult = await multicall.aggregate(
     poolAbi.functions.ticks,
-    ticks.map<[address: string, args: [idx: number]]>((t) => {
-      return [t.poolId, [Number(t.tickIdx)]];
+    ticks.map<[string, {tick: bigint}]>((t) => {
+      return [t.poolId, {
+        tick: t.tickIdx
+      }];
     }),
     500
   );
 
   for (let i = 0; i < ticks.length; i++) {
-    ticks[i].feeGrowthOutside0X128 = tickResult[i][1];
-    ticks[i].feeGrowthOutside1X128 = tickResult[i][3];
+    ticks[i].feeGrowthOutside0X128 = tickResult[i].feeGrowthOutside0X128;
+    ticks[i].feeGrowthOutside1X128 = tickResult[i].feeGrowthOutside1X128;
   }
 }
 

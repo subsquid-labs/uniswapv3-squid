@@ -1,18 +1,19 @@
-import * as ethers from 'ethers'
-import {LogEvent, Func, ContractBase} from './abi.support'
-import {ABI_JSON} from './ERC20SymbolBytes.abi'
-
-export const abi = new ethers.Interface(ABI_JSON);
+import * as p from '@subsquid/evm-codec'
+import { event, fun, indexed, ContractBase } from '@subsquid/evm-abi'
+import type { EventParams as EParams, FunctionArguments, FunctionReturn } from '@subsquid/evm-abi'
 
 export const functions = {
-    symbol: new Func<[], {}, string>(
-        abi, '0x95d89b41'
-    ),
+    symbol: fun("0x95d89b41", {}, p.bytes32),
 }
 
 export class Contract extends ContractBase {
 
-    symbol(): Promise<string> {
-        return this.eth_call(functions.symbol, [])
+    symbol() {
+        return this.eth_call(functions.symbol, {})
     }
 }
+
+/// Function types
+export type SymbolParams = FunctionArguments<typeof functions.symbol>
+export type SymbolReturn = FunctionReturn<typeof functions.symbol>
+
