@@ -1,5 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_} from "typeorm"
-import * as marshal from "./marshal"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
 import {Tx} from "./tx.model"
 import {Pool} from "./pool.model"
 
@@ -12,41 +11,41 @@ export class Collect {
     @PrimaryColumn_()
     id!: string
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     transactionId!: string
 
     @Index_()
     @ManyToOne_(() => Tx, {nullable: true})
     transaction!: Tx
 
-    @Column_("timestamp with time zone", {nullable: false})
+    @DateTimeColumn_({nullable: false})
     timestamp!: Date
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     poolId!: string
 
     @Index_()
     @ManyToOne_(() => Pool, {nullable: true})
     pool!: Pool
 
-    @Column_("text", {nullable: true})
+    @StringColumn_({nullable: true})
     owner!: string | undefined | null
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     amount0!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     amount1!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: true})
+    @FloatColumn_({nullable: true})
     amountUSD!: number | undefined | null
 
-    @Column_("int4", {nullable: false})
+    @IntColumn_({nullable: false})
     tickLower!: number
 
-    @Column_("int4", {nullable: false})
+    @IntColumn_({nullable: false})
     tickUpper!: number
 
-    @Column_("int4", {nullable: true})
+    @IntColumn_({nullable: true})
     logIndex!: number | undefined | null
 }

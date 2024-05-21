@@ -1,5 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_} from "typeorm"
-import * as marshal from "./marshal"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, IntColumn as IntColumn_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
 import {Pool} from "./pool.model"
 import {Position} from "./position.model"
 import {Tx} from "./tx.model"
@@ -13,60 +12,60 @@ export class PositionSnapshot {
     @PrimaryColumn_()
     id!: string
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     owner!: string
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     poolId!: string
 
     @Index_()
     @ManyToOne_(() => Pool, {nullable: true})
     pool!: Pool
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     positionId!: string
 
     @Index_()
     @ManyToOne_(() => Position, {nullable: true})
     position!: Position
 
-    @Column_("int4", {nullable: false})
+    @IntColumn_({nullable: false})
     blockNumber!: number
 
-    @Column_("timestamp with time zone", {nullable: false})
+    @DateTimeColumn_({nullable: false})
     timestamp!: Date
 
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    @BigIntColumn_({nullable: false})
     liquidity!: bigint
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     depositedToken0!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     depositedToken1!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     withdrawnToken0!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     withdrawnToken1!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     collectedFeesToken0!: number
 
-    @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
+    @FloatColumn_({nullable: false})
     collectedFeesToken1!: number
 
-    @Column_("text", {nullable: false})
+    @StringColumn_({nullable: false})
     transactionId!: string
 
     @Index_()
     @ManyToOne_(() => Tx, {nullable: true})
     transaction!: Tx
 
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    @BigIntColumn_({nullable: false})
     feeGrowthInside0LastX128!: bigint
 
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    @BigIntColumn_({nullable: false})
     feeGrowthInside1LastX128!: bigint
 }
