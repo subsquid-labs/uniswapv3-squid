@@ -5,6 +5,7 @@ import {
   FACTORY_DEPLOYED_AT,
   POSITIONS_ADDRESS
 } from "./utils/constants";
+import {assertNotNull} from '@subsquid/util-internal'
 
 import {
   BlockHeader,
@@ -24,7 +25,7 @@ const poolsMetadata = JSON.parse(fs.readFileSync("./assets/pools.json", "utf-8")
 export const processor = new EvmBatchProcessor()
   .setDataSource({
     archive: lookupArchive("eth-mainnet"),
-    chain: "https://rpc.ankr.com/eth/",
+    chain: assertNotNull(process.env.RPC_ETH_HTTP, "Please provide an Ethereum RPC endpoint at RPC_ETH_HTTP"),
   })
   .setFinalityConfirmation(75)
   .addLog({
