@@ -1,4 +1,4 @@
-import {UniswapDayData, PoolDayData, TokenDayData, TokenHourData, TickDayData} from '../model'
+import {UniswapDayData, PoolDayData, PoolHourData, TokenDayData, TokenHourData, TickDayData} from '../model'
 
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
@@ -39,10 +39,6 @@ export function createPoolDayData(poolId: string, dayIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
-    data.open = null
-    data.high = null
-    data.low = null
-    data.close = null
 
     return data
 }
@@ -58,10 +54,6 @@ export function createPoolHourData(poolId: string, hourIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
-    data.open = null
-    data.high = null
-    data.low = null
-    data.close = null
     data.liquidity = 0n
     data.sqrtPrice = 0n
     data.token0Price = 0

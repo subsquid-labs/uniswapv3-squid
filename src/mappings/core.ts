@@ -854,13 +854,13 @@ async function updatePoolDayData(
     ctx.entities.add(poolDayData);
   }
 
-  if (poolDayData.open == null) {
+  if (poolDayData.open === undefined) {
     poolDayData.open = pool.token0Price;
   }
-  if (poolDayData.high == null || pool.token0Price > poolDayData.high) {
+  if (poolDayData.high === undefined || pool.token0Price > poolDayData.high) {
     poolDayData.high = pool.token0Price;
   }
-  if (poolDayData.low == null || pool.token0Price < poolDayData.low) {
+  if (poolDayData.low === undefined || pool.token0Price < poolDayData.low) {
     poolDayData.low = pool.token0Price;
   }
   poolDayData.close = pool.token0Price;
@@ -894,13 +894,13 @@ async function updatePoolHourData(
     ctx.entities.add(poolHourData);
   }
 
-  if (poolHourData.open == null) {
+  if (poolHourData.open === undefined) {
     poolHourData.open = pool.token0Price;
   }
-  if (poolHourData.high == null || pool.token0Price > poolHourData.high) {
+  if (poolHourData.high === undefined || pool.token0Price > poolHourData.high) {
     poolHourData.high = pool.token0Price;
   }
-  if (poolHourData.low == null || pool.token0Price < poolHourData.low) {
+  if (poolHourData.low === undefined || pool.token0Price < poolHourData.low) {
     poolHourData.low = pool.token0Price;
   }
   poolHourData.close = pool.token0Price;
