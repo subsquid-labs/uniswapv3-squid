@@ -1,5 +1,5 @@
 import * as p from '@subsquid/evm-codec'
-import { event, fun, indexed, ContractBase } from '@subsquid/evm-abi'
+import { event, fun, viewFun, indexed, ContractBase } from '@subsquid/evm-abi'
 import type { EventParams as EParams, FunctionArguments, FunctionReturn } from '@subsquid/evm-abi'
 
 export const events = {
@@ -8,15 +8,15 @@ export const events = {
 }
 
 export const functions = {
-    name: fun("0x06fdde03", {}, p.string),
+    name: viewFun("0x06fdde03", {}, p.string),
     approve: fun("0x095ea7b3", {"_spender": p.address, "_value": p.uint256}, p.bool),
-    totalSupply: fun("0x18160ddd", {}, p.uint256),
+    totalSupply: viewFun("0x18160ddd", {}, p.uint256),
     transferFrom: fun("0x23b872dd", {"_from": p.address, "_to": p.address, "_value": p.uint256}, p.bool),
-    decimals: fun("0x313ce567", {}, p.uint8),
-    balanceOf: fun("0x70a08231", {"_owner": p.address}, p.uint256),
-    symbol: fun("0x95d89b41", {}, p.string),
+    decimals: viewFun("0x313ce567", {}, p.uint8),
+    balanceOf: viewFun("0x70a08231", {"_owner": p.address}, p.uint256),
+    symbol: viewFun("0x95d89b41", {}, p.string),
     transfer: fun("0xa9059cbb", {"_to": p.address, "_value": p.uint256}, p.bool),
-    allowance: fun("0xdd62ed3e", {"_owner": p.address, "_spender": p.address}, p.uint256),
+    allowance: viewFun("0xdd62ed3e", {"_owner": p.address, "_spender": p.address}, p.uint256),
 }
 
 export class Contract extends ContractBase {

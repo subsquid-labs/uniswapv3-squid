@@ -1,5 +1,5 @@
 import * as p from '@subsquid/evm-codec'
-import { event, fun, indexed, ContractBase } from '@subsquid/evm-abi'
+import { event, fun, viewFun, indexed, ContractBase } from '@subsquid/evm-abi'
 import type { EventParams as EParams, FunctionArguments, FunctionReturn } from '@subsquid/evm-abi'
 
 export const events = {
@@ -18,29 +18,29 @@ export const functions = {
     burn: fun("0xa34123a7", {"tickLower": p.int24, "tickUpper": p.int24, "amount": p.uint128}, {"amount0": p.uint256, "amount1": p.uint256}),
     collect: fun("0x4f1eb3d8", {"recipient": p.address, "tickLower": p.int24, "tickUpper": p.int24, "amount0Requested": p.uint128, "amount1Requested": p.uint128}, {"amount0": p.uint128, "amount1": p.uint128}),
     collectProtocol: fun("0x85b66729", {"recipient": p.address, "amount0Requested": p.uint128, "amount1Requested": p.uint128}, {"amount0": p.uint128, "amount1": p.uint128}),
-    factory: fun("0xc45a0155", {}, p.address),
-    fee: fun("0xddca3f43", {}, p.uint24),
-    feeGrowthGlobal0X128: fun("0xf3058399", {}, p.uint256),
-    feeGrowthGlobal1X128: fun("0x46141319", {}, p.uint256),
+    factory: viewFun("0xc45a0155", {}, p.address),
+    fee: viewFun("0xddca3f43", {}, p.uint24),
+    feeGrowthGlobal0X128: viewFun("0xf3058399", {}, p.uint256),
+    feeGrowthGlobal1X128: viewFun("0x46141319", {}, p.uint256),
     flash: fun("0x490e6cbc", {"recipient": p.address, "amount0": p.uint256, "amount1": p.uint256, "data": p.bytes}, ),
     increaseObservationCardinalityNext: fun("0x32148f67", {"observationCardinalityNext": p.uint16}, ),
     initialize: fun("0xf637731d", {"sqrtPriceX96": p.uint160}, ),
-    liquidity: fun("0x1a686502", {}, p.uint128),
-    maxLiquidityPerTick: fun("0x70cf754a", {}, p.uint128),
+    liquidity: viewFun("0x1a686502", {}, p.uint128),
+    maxLiquidityPerTick: viewFun("0x70cf754a", {}, p.uint128),
     mint: fun("0x3c8a7d8d", {"recipient": p.address, "tickLower": p.int24, "tickUpper": p.int24, "amount": p.uint128, "data": p.bytes}, {"amount0": p.uint256, "amount1": p.uint256}),
-    observations: fun("0x252c09d7", {"index": p.uint256}, {"blockTimestamp": p.uint32, "tickCumulative": p.int56, "secondsPerLiquidityCumulativeX128": p.uint160, "initialized": p.bool}),
-    observe: fun("0x883bdbfd", {"secondsAgos": p.array(p.uint32)}, {"tickCumulatives": p.array(p.int56), "secondsPerLiquidityCumulativeX128s": p.array(p.uint160)}),
-    positions: fun("0x514ea4bf", {"key": p.bytes32}, {"_liquidity": p.uint128, "feeGrowthInside0LastX128": p.uint256, "feeGrowthInside1LastX128": p.uint256, "tokensOwed0": p.uint128, "tokensOwed1": p.uint128}),
-    protocolFees: fun("0x1ad8b03b", {}, {"token0": p.uint128, "token1": p.uint128}),
+    observations: viewFun("0x252c09d7", {"index": p.uint256}, {"blockTimestamp": p.uint32, "tickCumulative": p.int56, "secondsPerLiquidityCumulativeX128": p.uint160, "initialized": p.bool}),
+    observe: viewFun("0x883bdbfd", {"secondsAgos": p.array(p.uint32)}, {"tickCumulatives": p.array(p.int56), "secondsPerLiquidityCumulativeX128s": p.array(p.uint160)}),
+    positions: viewFun("0x514ea4bf", {"key": p.bytes32}, {"_liquidity": p.uint128, "feeGrowthInside0LastX128": p.uint256, "feeGrowthInside1LastX128": p.uint256, "tokensOwed0": p.uint128, "tokensOwed1": p.uint128}),
+    protocolFees: viewFun("0x1ad8b03b", {}, {"token0": p.uint128, "token1": p.uint128}),
     setFeeProtocol: fun("0x8206a4d1", {"feeProtocol0": p.uint8, "feeProtocol1": p.uint8}, ),
-    slot0: fun("0x3850c7bd", {}, {"sqrtPriceX96": p.uint160, "tick": p.int24, "observationIndex": p.uint16, "observationCardinality": p.uint16, "observationCardinalityNext": p.uint16, "feeProtocol": p.uint8, "unlocked": p.bool}),
-    snapshotCumulativesInside: fun("0xa38807f2", {"tickLower": p.int24, "tickUpper": p.int24}, {"tickCumulativeInside": p.int56, "secondsPerLiquidityInsideX128": p.uint160, "secondsInside": p.uint32}),
+    slot0: viewFun("0x3850c7bd", {}, {"sqrtPriceX96": p.uint160, "tick": p.int24, "observationIndex": p.uint16, "observationCardinality": p.uint16, "observationCardinalityNext": p.uint16, "feeProtocol": p.uint8, "unlocked": p.bool}),
+    snapshotCumulativesInside: viewFun("0xa38807f2", {"tickLower": p.int24, "tickUpper": p.int24}, {"tickCumulativeInside": p.int56, "secondsPerLiquidityInsideX128": p.uint160, "secondsInside": p.uint32}),
     swap: fun("0x128acb08", {"recipient": p.address, "zeroForOne": p.bool, "amountSpecified": p.int256, "sqrtPriceLimitX96": p.uint160, "data": p.bytes}, {"amount0": p.int256, "amount1": p.int256}),
-    tickBitmap: fun("0x5339c296", {"wordPosition": p.int16}, p.uint256),
-    tickSpacing: fun("0xd0c93a7c", {}, p.int24),
-    ticks: fun("0xf30dba93", {"tick": p.int24}, {"liquidityGross": p.uint128, "liquidityNet": p.int128, "feeGrowthOutside0X128": p.uint256, "feeGrowthOutside1X128": p.uint256, "tickCumulativeOutside": p.int56, "secondsPerLiquidityOutsideX128": p.uint160, "secondsOutside": p.uint32, "initialized": p.bool}),
-    token0: fun("0x0dfe1681", {}, p.address),
-    token1: fun("0xd21220a7", {}, p.address),
+    tickBitmap: viewFun("0x5339c296", {"wordPosition": p.int16}, p.uint256),
+    tickSpacing: viewFun("0xd0c93a7c", {}, p.int24),
+    ticks: viewFun("0xf30dba93", {"tick": p.int24}, {"liquidityGross": p.uint128, "liquidityNet": p.int128, "feeGrowthOutside0X128": p.uint256, "feeGrowthOutside1X128": p.uint256, "tickCumulativeOutside": p.int56, "secondsPerLiquidityOutsideX128": p.uint160, "secondsOutside": p.uint32, "initialized": p.bool}),
+    token0: viewFun("0x0dfe1681", {}, p.address),
+    token1: viewFun("0xd21220a7", {}, p.address),
 }
 
 export class Contract extends ContractBase {

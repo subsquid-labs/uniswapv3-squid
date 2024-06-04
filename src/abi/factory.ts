@@ -1,5 +1,5 @@
 import * as p from '@subsquid/evm-codec'
-import { event, fun, indexed, ContractBase } from '@subsquid/evm-abi'
+import { event, fun, viewFun, indexed, ContractBase } from '@subsquid/evm-abi'
 import type { EventParams as EParams, FunctionArguments, FunctionReturn } from '@subsquid/evm-abi'
 
 export const events = {
@@ -11,9 +11,9 @@ export const events = {
 export const functions = {
     createPool: fun("0xa1671295", {"tokenA": p.address, "tokenB": p.address, "fee": p.uint24}, p.address),
     enableFeeAmount: fun("0x8a7c195f", {"fee": p.uint24, "tickSpacing": p.int24}, ),
-    feeAmountTickSpacing: fun("0x22afcccb", {"fee": p.uint24}, p.int24),
-    getPool: fun("0x1698ee82", {"tokenA": p.address, "tokenB": p.address, "fee": p.uint24}, p.address),
-    owner: fun("0x8da5cb5b", {}, p.address),
+    feeAmountTickSpacing: viewFun("0x22afcccb", {"fee": p.uint24}, p.int24),
+    getPool: viewFun("0x1698ee82", {"tokenA": p.address, "tokenB": p.address, "fee": p.uint24}, p.address),
+    owner: viewFun("0x8da5cb5b", {}, p.address),
     setOwner: fun("0x13af4035", {"_owner": p.address}, ),
 }
 
