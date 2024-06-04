@@ -29,3 +29,4 @@ deploy:
 #  addons:
 #    postgres:
 #      profile: large
+#      storage: 100G
