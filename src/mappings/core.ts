@@ -854,12 +854,16 @@ async function updatePoolDayData(
     ctx.entities.add(poolDayData);
   }
 
-  if (pool.token0Price > poolDayData.high) {
+  if (poolDayData.open == null) {
+    poolDayData.open = pool.token0Price;
+  }
+  if (poolDayData.high == null || pool.token0Price > poolDayData.high) {
     poolDayData.high = pool.token0Price;
   }
-  if (pool.token0Price < poolDayData.low) {
+  if (poolDayData.low == null || pool.token0Price < poolDayData.low) {
     poolDayData.low = pool.token0Price;
   }
+  poolDayData.close = pool.token0Price;
 
   poolDayData.liquidity = pool.liquidity;
   poolDayData.sqrtPrice = pool.sqrtPrice;
@@ -881,7 +885,7 @@ async function updatePoolHourData(
 ): Promise<PoolHourData> {
   let pool = await ctx.entities.getOrFail(Pool, poolId);
 
-  let hourID = getDayIndex(block.timestamp);
+  let hourID = getHourIndex(block.timestamp);
   let hourPoolID = snapshotId(poolId, hourID);
 
   let poolHourData = ctx.entities.get(PoolHourData, hourPoolID, false);
@@ -890,12 +894,16 @@ async function updatePoolHourData(
     ctx.entities.add(poolHourData);
   }
 
-  if (pool.token0Price > poolHourData.high) {
+  if (poolHourData.open == null) {
+    poolHourData.open = pool.token0Price;
+  }
+  if (poolHourData.high == null || pool.token0Price > poolHourData.high) {
     poolHourData.high = pool.token0Price;
   }
-  if (pool.token0Price < poolHourData.low) {
+  if (poolHourData.low == null || pool.token0Price < poolHourData.low) {
     poolHourData.low = pool.token0Price;
   }
+  poolHourData.close = pool.token0Price;
 
   poolHourData.liquidity = pool.liquidity;
   poolHourData.sqrtPrice = pool.sqrtPrice;

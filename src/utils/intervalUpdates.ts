@@ -39,16 +39,16 @@ export function createPoolDayData(poolId: string, dayIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
-    data.open = 0
-    data.high = 0
-    data.low = 0
-    data.close = 0
+    data.open = null
+    data.high = null
+    data.low = null
+    data.close = null
 
     return data
 }
 
 export function createPoolHourData(poolId: string, hourIndex: number) {
-    const data = new PoolDayData({id: snapshotId(poolId, hourIndex)})
+    const data = new PoolHourData({id: snapshotId(poolId, hourIndex)})
     data.date = new Date(hourIndex * HOUR_MS)
     data.poolId = poolId
     data.volumeToken0 = 0
@@ -58,10 +58,10 @@ export function createPoolHourData(poolId: string, hourIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
-    data.open = 0
-    data.high = 0
-    data.low = 0
-    data.close = 0
+    data.open = null
+    data.high = null
+    data.low = null
+    data.close = null
     data.liquidity = 0n
     data.sqrtPrice = 0n
     data.token0Price = 0
