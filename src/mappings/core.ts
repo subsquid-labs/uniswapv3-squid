@@ -768,6 +768,9 @@ async function processSwapData(
   let token1DayData = await updateTokenDayData(ctx, block, token1.id);
   let token1HourData = await updateTokenHourData(ctx, block, token1.id);
 
+  uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked;
+  uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked;
+  uniswapDayData.feesUSD = uniswapDayData.feesUSD + feesUSD;
   // Update volume metrics
   if (poolDayData && poolHourData) {
     poolDayData.volumeUSD = poolDayData.volumeUSD + amountTotalUSDTracked;
