@@ -39,6 +39,16 @@ export function createPoolDayData(poolId: string, dayIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
+    data.token0Price = 0
+    data.token1Price = 0
+    data.open = 0
+    data.high = 0
+    data.low = 0
+    data.close = 0
+    data.tick = 0
+    data.tvlUSD = 0
+    data.liquidity = 0n
+    data.sqrtPrice = 0n
 
     return data
 }
@@ -54,12 +64,16 @@ export function createPoolHourData(poolId: string, hourIndex: number) {
     data.txCount = 0
     data.feeGrowthGlobal0X128 = 0n
     data.feeGrowthGlobal1X128 = 0n
-    data.liquidity = 0n
-    data.sqrtPrice = 0n
     data.token0Price = 0
     data.token1Price = 0
+    data.open = 0
+    data.high = 0
+    data.low = 0
+    data.close = 0
     data.tick = 0
     data.tvlUSD = 0
+    data.liquidity = 0n
+    data.sqrtPrice = 0n
 
     return data
 }
@@ -85,7 +99,7 @@ export function createTokenDayData(tokenId: string, dayIndex: number) {
 
 export function createTokenHourData(tokenId: string, hourIndex: number) {
     const data = new TokenHourData({id: snapshotId(tokenId, hourIndex)})
-    data.date = new Date(hourIndex * DAY_MS)
+    data.date = new Date(hourIndex * HOUR_MS)
     data.tokenId = tokenId
     data.volume = 0
     data.volumeUSD = 0
