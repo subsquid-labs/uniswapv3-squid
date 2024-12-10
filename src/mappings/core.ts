@@ -1,9 +1,7 @@
 import { BigDecimal } from "@subsquid/big-decimal";
 import { EvmLog } from "@subsquid/evm-processor/lib/interfaces/evm";
 import {
-  BatchBlock,
   BlockHandlerContext,
-  CommonHandlerContext,
   LogHandlerContext,
   BlockHeader,
 } from "../utils/interfaces/interfaces";
@@ -51,6 +49,7 @@ import {
   STABLE_COINS,
   USDC_WETH_03_POOL,
   WETH_ADDRESS,
+  WHITELIST_TOKENS
 } from "../utils/pricing";
 import { createTick, feeTierToTickSpacing } from "../utils/tick";
 import { last, processItem } from "../utils/tools";
@@ -195,7 +194,7 @@ async function prefetch(
     }
 
     for (let id of tokens.keys()) {
-      ctx.entities.defer(PoolHourData, snapshotId(id, index));
+      ctx.entities.defer(TokenHourData, snapshotId(id, index));
     }
   }
 
@@ -291,6 +290,19 @@ async function processInitializeData(
   pool.sqrtPrice = data.sqrtPrice;
   pool.tick = data.tick;
 
+  // Calculate and update token prices from sqrtPrice
+  let prices = sqrtPriceX96ToTokenPrices(
+    data.sqrtPrice,
+    token0.decimals,
+    token1.decimals,
+    data.poolId,
+    token0.symbol,
+    token1.symbol,
+    new Date(block.timestamp).toISOString()
+  );
+  pool.token0Price = prices[0];
+  pool.token1Price = prices[1];
+
   // update token prices
   token0.derivedETH = await getEthPerToken(ctx, token0.id);
   token1.derivedETH = await getEthPerToken(ctx, token1.id);
@@ -372,6 +384,12 @@ async function processMintData(
   factory.totalValueLockedUSD =
     factory.totalValueLockedETH * bundle.ethPriceUSD;
 
+  token0.totalValueLocked = token0.totalValueLocked + amount0;
+  token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
+
+  token1.totalValueLocked = token1.totalValueLocked + amount1;
+  token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
+
   let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
   if (!transaction) {
     transaction = createTransaction(block, data.transaction);
@@ -424,18 +442,36 @@ async function processMintData(
   upperTick.liquidityGross += data.amount;
   upperTick.liquidityNet -= data.amount;
 
-  // TODO: Update Tick's volume, fees, and liquidity provider count. Computing these on the tick
-  // level requires reimplementing some of the swapping code from v3-core.
+  // Update volume metrics
+  let uniswapDayData = await updateUniswapDayData(ctx, block);
+  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
+  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
+  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
+  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
+  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
+  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
 
-  await updateUniswapDayData(ctx, block);
-  await updatePoolDayData(ctx, block, pool.id);
-  await updatePoolHourData(ctx, block, pool.id);
-  await updateTokenDayData(ctx, block, token0.id);
-  await updateTokenHourData(ctx, block, token0.id);
-  await updateTokenDayData(ctx, block, token1.id);
-  await updateTokenHourData(ctx, block, token1.id);
-  // await updateTickFeeVarsAndSave(lowerTick!, event)
-  // await updateTickFeeVarsAndSave(upperTick!, event)
+  if (poolDayData && poolHourData) {
+    poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD;
+    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0;
+    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1;
+
+    poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD;
+    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0;
+    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1;
+  }
+
+  token0DayData.volume = token0DayData.volume + amount0;
+  token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD;
+
+  token0HourData.volume = token0HourData.volume + amount0;
+  token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD;
+
+  token1DayData.volume = token1DayData.volume + amount1;
+  token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD;
+
+  token1HourData.volume = token1HourData.volume + amount1;
+  token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD;
 }
 
 async function processBurnData(
@@ -492,16 +528,25 @@ async function processBurnData(
 
   pool.totalValueLockedToken0 = pool.totalValueLockedToken0 - amount0;
   pool.totalValueLockedToken1 = pool.totalValueLockedToken1 - amount1;
+
+  // Update TVL in ETH and USD
   pool.totalValueLockedETH =
     pool.totalValueLockedToken0 * token0.derivedETH +
     pool.totalValueLockedToken1 * token1.derivedETH;
   pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD;
 
-  // reset aggregates with new amounts
+  // Update factory TVL
   factory.totalValueLockedETH =
     factory.totalValueLockedETH + pool.totalValueLockedETH;
   factory.totalValueLockedUSD =
     factory.totalValueLockedETH * bundle.ethPriceUSD;
+
+  // Update token TVL
+  token0.totalValueLocked = token0.totalValueLocked - amount0;
+  token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
+
+  token1.totalValueLocked = token1.totalValueLocked - amount1;
+  token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
 
   // burn entity
   let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
@@ -547,22 +592,43 @@ async function processBurnData(
     upperTick.liquidityNet += data.amount;
   }
 
-  await updateUniswapDayData(ctx, block);
-  await updatePoolDayData(ctx, block, pool.id);
-  await updatePoolHourData(ctx, block, pool.id);
-  await updateTokenDayData(ctx, block, token0.id);
-  await updateTokenHourData(ctx, block, token0.id);
-  await updateTokenDayData(ctx, block, token1.id);
-  await updateTokenHourData(ctx, block, token1.id);
-  // updateTickFeeVarsAndSave(lowerTick!, event)
-  // updateTickFeeVarsAndSave(upperTick!, event)
+  // Update volume metrics
+  let uniswapDayData = await updateUniswapDayData(ctx, block);
+  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
+  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
+  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
+  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
+  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
+  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
+
+  if (poolDayData && poolHourData) {
+    poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD;
+    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0;
+    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1;
+
+    poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD;
+    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0;
+    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1;
+  }
+
+  token0DayData.volume = token0DayData.volume + amount0;
+  token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD;
+
+  token0HourData.volume = token0HourData.volume + amount0;
+  token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD;
+
+  token1DayData.volume = token1DayData.volume + amount1;
+  token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD;
+
+  token1HourData.volume = token1HourData.volume + amount1;
+  token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD;
 }
 
 async function processSwapData(
   ctx: ContextWithEntityManager,
   block: BlockHeader,
   data: SwapData
-) {
+): Promise<void> {
   if (data.poolId == "0x9663f2ca0454accad3e094448ea6f77443880454") return;
 
   let bundle = await ctx.entities.getOrFail(Bundle, "1");
@@ -573,6 +639,7 @@ async function processSwapData(
 
   let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
   let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+
 
   let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
   let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
@@ -595,6 +662,7 @@ async function processSwapData(
     token1.id,
     amount1USD
   );
+
   let amountTotalETHTracked = safeDiv(
     amountTotalUSDTracked,
     bundle.ethPriceUSD
@@ -656,7 +724,11 @@ async function processSwapData(
   let prices = sqrtPriceX96ToTokenPrices(
     pool.sqrtPrice,
     token0.decimals,
-    token1.decimals
+    token1.decimals,
+    pool.id,
+    token0.symbol,
+    token1.symbol,
+    new Date(block.timestamp).toISOString()
   );
   pool.token0Price = prices[0];
   pool.token1Price = prices[1];
@@ -674,6 +746,7 @@ async function processSwapData(
     pool.totalValueLockedToken1 * token1.derivedETH;
   pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD;
 
+  // Update factory TVL
   factory.totalValueLockedETH =
     factory.totalValueLockedETH + pool.totalValueLockedETH;
   factory.totalValueLockedUSD =
@@ -683,6 +756,68 @@ async function processSwapData(
     token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
   token1.totalValueLockedUSD =
     token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
+
+
+
+  // // interval data
+  let uniswapDayData = await updateUniswapDayData(ctx, block);
+  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
+  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
+  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
+  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
+  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
+  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
+
+  uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked;
+  uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked;
+  uniswapDayData.feesUSD = uniswapDayData.feesUSD + feesUSD;
+  // Update volume metrics
+  if (poolDayData && poolHourData) {
+    poolDayData.volumeUSD = poolDayData.volumeUSD + amountTotalUSDTracked;
+    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0Abs;
+    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1Abs;
+    poolDayData.feesUSD = poolDayData.feesUSD + feesUSD;
+
+    poolHourData.volumeUSD = poolHourData.volumeUSD + amountTotalUSDTracked;
+    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0Abs;
+    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1Abs;
+    poolHourData.feesUSD = poolHourData.feesUSD + feesUSD;
+  }
+
+  token0DayData.volume = token0DayData.volume + amount0Abs;
+  token0DayData.volumeUSD = token0DayData.volumeUSD + amountTotalUSDTracked;
+  token0DayData.untrackedVolumeUSD =
+    token0DayData.untrackedVolumeUSD + amountTotalUSDUntracked;
+  token0DayData.feesUSD = token0DayData.feesUSD + feesUSD;
+
+  token0HourData.volume = token0HourData.volume + amount0Abs;
+  token0HourData.volumeUSD = token0HourData.volumeUSD + amountTotalUSDTracked;
+  token0HourData.untrackedVolumeUSD =
+    token0HourData.untrackedVolumeUSD + amountTotalUSDUntracked;
+  token0HourData.feesUSD = token0HourData.feesUSD + feesUSD;
+
+  token1DayData.volume = token1DayData.volume + amount1Abs;
+  token1DayData.volumeUSD = token1DayData.volumeUSD + amountTotalUSDTracked;
+  token1DayData.untrackedVolumeUSD =
+    token1DayData.untrackedVolumeUSD + amountTotalUSDUntracked;
+  token1DayData.feesUSD = token1DayData.feesUSD + feesUSD;
+
+  token1HourData.volume = token1HourData.volume + amount1Abs;
+  token1HourData.volumeUSD = token1HourData.volumeUSD + amountTotalUSDTracked;
+  token1HourData.untrackedVolumeUSD =
+    token1HourData.untrackedVolumeUSD + amountTotalUSDUntracked;
+  token1HourData.feesUSD = token1HourData.feesUSD + feesUSD;
+
+  // Update inner vars of current or crossed ticks
+  let newTick = pool.tick;
+  let tickSpacing = feeTierToTickSpacing(pool.feeTier);
+  let modulo = Math.floor(Number(newTick) / Number(tickSpacing));
+  if (modulo == 0) {
+    let tick = createTick(tickId(pool.id, newTick), newTick, pool.id);
+    tick.createdAtBlockNumber = block.height;
+    tick.createdAtTimestamp = new Date(block.timestamp);
+    ctx.entities.add(tick);
+  }
 
   // create Swap event
   let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
@@ -708,114 +843,67 @@ async function processSwapData(
   swap.logIndex = data.logIndex;
   ctx.entities.add(swap);
 
-  // // interval data
-  let uniswapDayData = await updateUniswapDayData(ctx, block);
-  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
-  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
-  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
-  let token1DayData = await updateTokenHourData(ctx, block, token0.id);
-  let token0HourData = await updateTokenDayData(ctx, block, token1.id);
-  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
-
-  // // update volume metrics
-  uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked;
-  uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked;
-  uniswapDayData.feesUSD = uniswapDayData.feesUSD + feesUSD;
-
-  poolDayData.volumeUSD = poolDayData.volumeUSD + amountTotalUSDTracked;
-  poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0Abs;
-  poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1Abs;
-  poolDayData.feesUSD = poolDayData.feesUSD + feesUSD;
-
-  poolHourData.volumeUSD = poolHourData.volumeUSD + amountTotalUSDTracked;
-  poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0Abs;
-  poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1Abs;
-  poolHourData.feesUSD = poolHourData.feesUSD + feesUSD;
-
-  token0DayData.volume = token0DayData.volume + amount0Abs;
-  token0DayData.volumeUSD = token0DayData.volumeUSD + amountTotalUSDTracked;
-  token0DayData.untrackedVolumeUSD =
-    token0DayData.untrackedVolumeUSD + amountTotalUSDTracked;
-  token0DayData.feesUSD = token0DayData.feesUSD + feesUSD;
-
-  token0HourData.volume = token0HourData.volume + amount0Abs;
-  token0HourData.volumeUSD = token0HourData.volumeUSD + amountTotalUSDTracked;
-  token0HourData.untrackedVolumeUSD =
-    token0HourData.untrackedVolumeUSD + amountTotalUSDTracked;
-  token0HourData.feesUSD = token0HourData.feesUSD + feesUSD;
-
-  token1DayData.volume = token1DayData.volume + amount1Abs;
-  token1DayData.volumeUSD = token1DayData.volumeUSD + amountTotalUSDTracked;
-  token1DayData.untrackedVolumeUSD =
-    token1DayData.untrackedVolumeUSD + amountTotalUSDTracked;
-  token1DayData.feesUSD = token1DayData.feesUSD + feesUSD;
-
-  token1HourData.volume = token1HourData.volume + amount1Abs;
-  token1HourData.volumeUSD = token1HourData.volumeUSD + amountTotalUSDTracked;
-  token1HourData.untrackedVolumeUSD =
-    token1HourData.untrackedVolumeUSD + amountTotalUSDTracked;
-  token1HourData.feesUSD = token1HourData.feesUSD + feesUSD;
-
-  // Update inner vars of current or crossed ticks
-  let newTick = pool.tick;
-  let tickSpacing = feeTierToTickSpacing(pool.feeTier);
-  let modulo = Math.floor(Number(newTick) / Number(tickSpacing));
-  if (modulo == 0) {
-    let tick = createTick(tickId(pool.id, newTick), newTick, pool.id);
-    tick.createdAtBlockNumber = block.height;
-    tick.createdAtTimestamp = new Date(block.timestamp);
-    ctx.entities.add(tick);
-  }
 }
 
 async function getEthPerToken(
   ctx: ContextWithEntityManager,
   tokenId: string
 ): Promise<number> {
-  if (tokenId == WETH_ADDRESS) return 1;
+  let bundle = await ctx.entities.getOrFail(Bundle, "1");
+  let token = await ctx.entities.getOrFail(Token, tokenId);
+
+  // Return 1 for WETH
+  if (tokenId.toLowerCase() === WETH_ADDRESS.toLowerCase()) {
+    return 1;
+  }
 
   // for now just take USD from pool with greatest TVL
   // need to update this to actually detect best rate based on liquidity distribution
   let largestLiquidityETH = MINIMUM_ETH_LOCKED;
   let priceSoFar = 0;
+  let selectedPoolAddress = '';
 
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-
-  // hardcoded fix for incorrect rates
-  // if whitelist includes token - get the safe price
-  if (STABLE_COINS.includes(tokenId)) {
+  // Use WHITELIST_TOKENS instead of STABLE_COINS for consistency
+  if (WHITELIST_TOKENS.includes(tokenId.toLowerCase())) {
     priceSoFar = safeDiv(1, bundle.ethPriceUSD);
   } else {
-    let token = await ctx.entities.getOrFail(Token, tokenId);
     for (let poolAddress of token.whitelistPools) {
       let pool = await ctx.entities.getOrFail(Pool, poolAddress);
       if (pool.liquidity === 0n) continue;
 
-      if (pool.token0Id == tokenId) {
+      if (pool.token0Id.toLowerCase() === tokenId.toLowerCase()) {
         // whitelist token is token1
         let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+        // Skip if token1's price is not derived yet
+        if (token1.derivedETH === 0) continue;
+        
         // get the derived ETH in pool
         let ethLocked = pool.totalValueLockedToken1 * token1.derivedETH;
-        if (ethLocked > largestLiquidityETH) {
+        if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
           largestLiquidityETH = ethLocked;
           // token1 per our token * Eth per token1
           priceSoFar = pool.token1Price * token1.derivedETH;
+          selectedPoolAddress = poolAddress;
         }
       }
-      if (pool.token1Id == tokenId) {
+      if (pool.token1Id.toLowerCase() === tokenId.toLowerCase()) {
         // whitelist token is token0
         let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
+        // Skip if token0's price is not derived yet
+        if (token0.derivedETH === 0) continue;
+        
         // get the derived ETH in pool
         let ethLocked = pool.totalValueLockedToken0 * token0.derivedETH;
-        if (ethLocked > largestLiquidityETH) {
+        if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
           largestLiquidityETH = ethLocked;
           // token0 per our token * ETH per token0
           priceSoFar = pool.token0Price * token0.derivedETH;
+          selectedPoolAddress = poolAddress;
         }
       }
     }
   }
-  return priceSoFar; // nothing was found return 0
+  return priceSoFar;
 }
 
 async function updateUniswapDayData(
@@ -842,37 +930,64 @@ async function updatePoolDayData(
   ctx: ContextWithEntityManager,
   block: BlockHeader,
   poolId: string
-): Promise<PoolDayData> {
+): Promise<PoolDayData | null> {
   let pool = await ctx.entities.getOrFail(Pool, poolId);
+  let bundle = await ctx.entities.getOrFail(Bundle, "1");
+
+  // Skip creating records if there's no valid price data
+  if (pool.sqrtPrice === 0n) {
+    return null;
+  }
+
+  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
+  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+  let prices = sqrtPriceX96ToTokenPrices(
+    pool.sqrtPrice,
+    token0.decimals,
+    token1.decimals,
+    pool.id,
+    token0.symbol,
+    token1.symbol,
+    new Date(block.timestamp).toISOString()
+  );
+
+  // Skip if we don't have valid prices
+  if (prices[0] === 0 || prices[1] === 0) {
+    return null;
+  }
 
   let dayID = getDayIndex(block.timestamp);
   let dayPoolID = snapshotId(poolId, dayID);
 
   let poolDayData = ctx.entities.get(PoolDayData, dayPoolID, false);
-  if (poolDayData == null) {
+  let isNewEntity = !poolDayData;
+  
+  if (!poolDayData) {
     poolDayData = createPoolDayData(poolId, dayID);
     ctx.entities.add(poolDayData);
   }
 
-  if (poolDayData.open === undefined) {
-    poolDayData.open = pool.token0Price;
+  // Update prices
+  if (isNewEntity || poolDayData.open === 0) {
+    poolDayData.open = prices[0];
   }
-  if (poolDayData.high === undefined || pool.token0Price > poolDayData.high) {
-    poolDayData.high = pool.token0Price;
+  if (isNewEntity || poolDayData.high === 0 || prices[0] > poolDayData.high) {
+    poolDayData.high = prices[0];
   }
-  if (poolDayData.low === undefined || pool.token0Price < poolDayData.low) {
-    poolDayData.low = pool.token0Price;
+  if (isNewEntity || poolDayData.low === 0 || prices[0] < poolDayData.low) {
+    poolDayData.low = prices[0];
   }
-  poolDayData.close = pool.token0Price;
+  poolDayData.close = prices[0];
+  poolDayData.token0Price = prices[0];
+  poolDayData.token1Price = prices[1];
 
+  // Update TVL
+  poolDayData.tvlUSD = pool.totalValueLockedUSD;
   poolDayData.liquidity = pool.liquidity;
   poolDayData.sqrtPrice = pool.sqrtPrice;
   poolDayData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128;
   poolDayData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128;
-  poolDayData.token0Price = pool.token0Price;
-  poolDayData.token1Price = pool.token1Price;
   poolDayData.tick = pool.tick;
-  poolDayData.tvlUSD = pool.totalValueLockedUSD;
   poolDayData.txCount = pool.txCount;
 
   return poolDayData;
@@ -882,37 +997,64 @@ async function updatePoolHourData(
   ctx: ContextWithEntityManager,
   block: BlockHeader,
   poolId: string
-): Promise<PoolHourData> {
+): Promise<PoolHourData | null> {
   let pool = await ctx.entities.getOrFail(Pool, poolId);
+  let bundle = await ctx.entities.getOrFail(Bundle, "1");
 
-  let hourID = getHourIndex(block.timestamp);
-  let hourPoolID = snapshotId(poolId, hourID);
+  // Skip creating records if there's no valid price data
+  if (pool.sqrtPrice === 0n) {
+    return null;
+  }
+
+  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
+  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+  let prices = sqrtPriceX96ToTokenPrices(
+    pool.sqrtPrice,
+    token0.decimals,
+    token1.decimals,
+    pool.id,
+    token0.symbol,
+    token1.symbol,
+    new Date(block.timestamp).toISOString()
+  );
+
+  // Skip if we don't have valid prices
+  if (prices[0] === 0 || prices[1] === 0) {
+    return null;
+  }
+
+  let hourIndex = getHourIndex(block.timestamp);
+  let hourPoolID = snapshotId(poolId, hourIndex);
 
   let poolHourData = ctx.entities.get(PoolHourData, hourPoolID, false);
-  if (poolHourData == null) {
-    poolHourData = createPoolHourData(poolId, hourID);
+  let isNewEntity = !poolHourData;
+  
+  if (!poolHourData) {
+    poolHourData = createPoolHourData(poolId, hourIndex);
     ctx.entities.add(poolHourData);
   }
 
-  if (poolHourData.open === undefined) {
-    poolHourData.open = pool.token0Price;
+  // Update prices
+  if (isNewEntity || poolHourData.open === 0) {
+    poolHourData.open = prices[0];
   }
-  if (poolHourData.high === undefined || pool.token0Price > poolHourData.high) {
-    poolHourData.high = pool.token0Price;
+  if (isNewEntity || poolHourData.high === 0 || prices[0] > poolHourData.high) {
+    poolHourData.high = prices[0];
   }
-  if (poolHourData.low === undefined || pool.token0Price < poolHourData.low) {
-    poolHourData.low = pool.token0Price;
+  if (isNewEntity || poolHourData.low === 0 || prices[0] < poolHourData.low) {
+    poolHourData.low = prices[0];
   }
-  poolHourData.close = pool.token0Price;
+  poolHourData.close = prices[0];
+  poolHourData.token0Price = prices[0];
+  poolHourData.token1Price = prices[1];
 
+  // Update TVL
+  poolHourData.tvlUSD = pool.totalValueLockedUSD;
   poolHourData.liquidity = pool.liquidity;
   poolHourData.sqrtPrice = pool.sqrtPrice;
   poolHourData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128;
   poolHourData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128;
-  poolHourData.token0Price = pool.token0Price;
-  poolHourData.token1Price = pool.token1Price;
   poolHourData.tick = pool.tick;
-  poolHourData.tvlUSD = pool.totalValueLockedUSD;
   poolHourData.txCount = pool.txCount;
 
   return poolHourData;
@@ -924,32 +1066,44 @@ async function updateTokenDayData(
   tokenId: string
 ): Promise<TokenDayData> {
   let bundle = await ctx.entities.getOrFail(Bundle, "1");
-
   let token = await ctx.entities.getOrFail(Token, tokenId);
 
   let dayID = getDayIndex(block.timestamp);
   let tokenDayID = snapshotId(tokenId, dayID);
 
-  let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
-
   let tokenDayData = await ctx.entities.get(TokenDayData, tokenDayID, false);
+  let isNewEntity = !tokenDayData;
+  
   if (tokenDayData == null) {
     tokenDayData = createTokenDayData(tokenId, dayID);
     ctx.entities.add(tokenDayData);
   }
 
-  if (tokenPrice > tokenDayData.high) {
-    tokenDayData.high = tokenPrice;
+  // Calculate price only if we have valid inputs
+  if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
+    let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
+
+    if (tokenPrice > 0) {
+      if (isNewEntity || tokenDayData.high === 0 || tokenPrice > tokenDayData.high) {
+        tokenDayData.high = tokenPrice;
+      }
+
+      if (isNewEntity || tokenDayData.low === 0 || tokenPrice < tokenDayData.low) {
+        tokenDayData.low = tokenPrice;
+      }
+
+      tokenDayData.close = tokenPrice;
+      tokenDayData.priceUSD = tokenPrice;
+    }
   }
 
-  if (tokenPrice < tokenDayData.low) {
-    tokenDayData.low = tokenPrice;
+  // Only update TVL if values are non-zero
+  if (token.totalValueLocked > 0) {
+    tokenDayData.totalValueLocked = token.totalValueLocked;
   }
-
-  tokenDayData.close = tokenPrice;
-  tokenDayData.priceUSD = token.derivedETH * bundle.ethPriceUSD;
-  tokenDayData.totalValueLocked = token.totalValueLocked;
-  tokenDayData.totalValueLockedUSD = token.totalValueLockedUSD;
+  if (token.totalValueLockedUSD > 0) {
+    tokenDayData.totalValueLockedUSD = token.totalValueLockedUSD;
+  }
 
   return tokenDayData;
 }
@@ -960,34 +1114,46 @@ async function updateTokenHourData(
   tokenId: string
 ): Promise<TokenHourData> {
   let bundle = await ctx.entities.getOrFail(Bundle, "1");
-
   let token = await ctx.entities.getOrFail(Token, tokenId);
 
-  let hourID = getDayIndex(block.timestamp);
+  let hourID = getHourIndex(block.timestamp); 
   let tokenHourID = snapshotId(tokenId, hourID);
 
-  let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
-
   let tokenHourData = ctx.entities.get(TokenHourData, tokenHourID, false);
+  let isNewEntity = !tokenHourData;
+  
   if (tokenHourData == null) {
     tokenHourData = createTokenHourData(tokenId, hourID);
     ctx.entities.add(tokenHourData);
   }
 
-  if (tokenPrice > tokenHourData.high) {
-    tokenHourData.high = tokenPrice;
+  // Calculate price only if we have valid inputs
+  if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
+    let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
+
+    if (tokenPrice > 0) {
+      if (isNewEntity || tokenHourData.high === 0 || tokenPrice > tokenHourData.high) {
+        tokenHourData.high = tokenPrice;
+      }
+
+      if (isNewEntity || tokenHourData.low === 0 || tokenPrice < tokenHourData.low) {
+        tokenHourData.low = tokenPrice;
+      }
+
+      tokenHourData.close = tokenPrice;
+      tokenHourData.priceUSD = tokenPrice;
+    }
   }
 
-  if (tokenPrice < tokenHourData.low) {
-    tokenHourData.low = tokenPrice;
+  // Only update TVL if values are non-zero
+  if (token.totalValueLocked > 0) {
+    tokenHourData.totalValueLocked = token.totalValueLocked;
+  }
+  if (token.totalValueLockedUSD > 0) {
+    tokenHourData.totalValueLockedUSD = token.totalValueLockedUSD;
   }
 
-  tokenHourData.close = tokenPrice;
-  tokenHourData.priceUSD = token.derivedETH * bundle.ethPriceUSD;
-  tokenHourData.totalValueLocked = token.totalValueLocked;
-  tokenHourData.totalValueLockedUSD = token.totalValueLockedUSD;
-
-  return tokenHourData as TokenHourData;
+  return tokenHourData;
 }
 
 async function updateTickDayData(
@@ -1005,7 +1171,6 @@ async function updateTickDayData(
     tickDayData = createTickDayData(tickId, dayID);
     ctx.entities.add(tickDayData);
   }
-
   tickDayData.liquidityGross = tick.liquidityGross;
   tickDayData.liquidityNet = tick.liquidityNet;
   tickDayData.volumeToken0 = tick.volumeToken0;
