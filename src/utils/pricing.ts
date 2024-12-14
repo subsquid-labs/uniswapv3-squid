@@ -1,6 +1,4 @@
 /* eslint-disable prefer-const */
-import { safeDiv } from "../utils/index";
-import { BigDecimal } from "@subsquid/big-decimal";
 
 export const WETH_ADDRESS = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
 export const USDC_WETH_03_POOL = "0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8";
@@ -29,6 +27,7 @@ export let WHITELIST_TOKENS: string[] = [
   "0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0", // MATIC
   "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9", // AAVE
   "0xfe2e637202056d30016725477c5da089ab0a043a", // sETH2
+  "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984", // UNI
 ];
 
 export let STABLE_COINS: string[] = [
@@ -46,18 +45,56 @@ let Q192 = 2 ** 192;
 export function sqrtPriceX96ToTokenPrices(
   sqrtPriceX96: bigint,
   decimals0: number,
-  decimals1: number
+  decimals1: number,
+  poolAddress: string,
+  token0Symbol: string,
+  token1Symbol: string,
+  timestamp: string
 ): number[] {
-  let num = sqrtPriceX96 ** 2n;
-  let denom = BigInt(Q192);
+  // Validate inputs
+  if (!sqrtPriceX96) {
+    return [0, 0];
+  }
 
-  let price1 = BigDecimal(
-    num / denom,
-    BigInt(decimals1) - BigInt(decimals0)
-  ).toNumber();
+  if (sqrtPriceX96 <= 0n) {
+    return [0, 0];
+  }
 
-  let price0 = safeDiv(1, price1);
-  return [price0, price1];
+  if (decimals0 < 0 || decimals1 < 0) {
+    return [0, 0];
+  }
+
+  try {
+    // Convert sqrtPriceX96 to number safely
+    const sqrtPriceFloat = Number(sqrtPriceX96);
+    if (!isFinite(sqrtPriceFloat)) {
+      throw new Error('sqrtPrice conversion to float resulted in non-finite number');
+    }
+
+    // Calculate square of price with decimal adjustment
+    const price = sqrtPriceFloat * sqrtPriceFloat * Math.pow(10, decimals0 - decimals1) / Number(1n << 192n);
+
+    // Validate calculated price
+    if (!isFinite(price) || price <= 0) {
+      throw new Error('Invalid price calculation result');
+    }
+
+    const price0 = 1 / price;
+    const price1 = price;
+
+    // Validate final prices
+    if (!isFinite(price0) || !isFinite(price1) || price0 <= 0 || price1 <= 0) {
+      throw new Error('Invalid final price values');
+    }
+    
+    return [price0, price1];
+  } catch (err) {
+    const error = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`Price calculation failed for pool ${poolAddress}: ${error}`);
+    console.error(`Input values: sqrtPriceX96=${sqrtPriceX96}, decimals0=${decimals0}, decimals1=${decimals1}`);
+
+    return [0, 0];
+  }
 }
 
 /**
@@ -72,18 +109,23 @@ export function getTrackedAmountUSD(
   token1: string,
   amount1USD: number
 ): number {
+  // Convert addresses to lowercase for comparison
+  const t0 = token0.toLowerCase();
+  const t1 = token1.toLowerCase();
+  const whitelist = WHITELIST_TOKENS.map(t => t.toLowerCase());
+
   // both are whitelist tokens, return sum of both amounts
-  if (WHITELIST_TOKENS.includes(token0) && WHITELIST_TOKENS.includes(token1)) {
+  if (whitelist.includes(t0) && whitelist.includes(t1)) {
     return (amount0USD + amount1USD) / 2;
   }
 
-  // take double value of the whitelisted token amount
-  if (WHITELIST_TOKENS.includes(token0) && !WHITELIST_TOKENS.includes(token1)) {
+  // take value of the whitelisted token amount
+  if (whitelist.includes(t0) && !whitelist.includes(t1)) {
     return amount0USD;
   }
 
-  // take double value of the whitelisted token amount
-  if (!WHITELIST_TOKENS.includes(token0) && WHITELIST_TOKENS.includes(token1)) {
+  // take value of the whitelisted token amount
+  if (!whitelist.includes(t0) && whitelist.includes(t1)) {
     return amount1USD;
   }
 
