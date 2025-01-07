@@ -1,11 +1,12 @@
 manifestVersion: subsquid.io/v0.1
 name: uniswapv3-squid
-version: 1
 description: 'The very first evm squid from manifest  '
 build: 
 deploy:
   addons:
-    postgres: 
+    postgres:
+    rpc:
+      - eth.http
   processor:
     cmd:
       - node
@@ -22,11 +23,11 @@ deploy:
       - '100'
       - '--dumb-cache-max-age'
       - '1000'
-#scale:
-#  dedicated: true
-#  processor:
-#    profile: large
-#  addons:
-#    postgres:
-#      profile: large
-#      storage: 100G
+scale:
+  dedicated: true
+  processor:
+    profile: medium
+  addons:
+    postgres:
+      profile: medium
+      storage: 120G
