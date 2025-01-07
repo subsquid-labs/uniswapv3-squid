@@ -29,7 +29,11 @@ import {
 } from "../model";
 import { safeDiv } from "../utils";
 import { BlockMap } from "../utils/blockMap";
-import { FACTORY_ADDRESS, MULTICALL_ADDRESS } from "../utils/constants";
+import {
+  FACTORY_ADDRESS,
+  MULTICALL_ADDRESS,
+  MULTICALL_PAGE_SIZE,
+} from "../utils/constants";
 import { EntityManager } from "../utils/entityManager";
 import {
   createPoolDayData,
@@ -1363,7 +1367,7 @@ async function updateTickFeeVars(
         tick: t.tickIdx
       }];
     }),
-    500
+    MULTICALL_PAGE_SIZE
   );
 
   for (let i = 0; i < ticks.length; i++) {
@@ -1378,18 +1382,16 @@ async function updatePoolFeeVars(
 ): Promise<void> {
   let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
 
+  const calls: [string, {}][] = pools.map((p) => {return [p.id, {}];})
   let fee0 = await multicall.aggregate(
     poolAbi.functions.feeGrowthGlobal0X128,
-    pools.map((p) => {
-      return [p.id, []];
-    })
+    calls,
+    MULTICALL_PAGE_SIZE
   );
-
   let fee1 = await multicall.aggregate(
     poolAbi.functions.feeGrowthGlobal1X128,
-    pools.map((p) => {
-      return [p.id, []];
-    })
+    calls,
+    MULTICALL_PAGE_SIZE
   );
 
   for (let i = 0; i < pools.length; i++) {

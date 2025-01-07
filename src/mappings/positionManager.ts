@@ -18,6 +18,7 @@ import {
   FACTORY_ADDRESS,
   MULTICALL_ADDRESS,
   POSITIONS_ADDRESS,
+  MULTICALL_PAGE_SIZE,
 } from "../utils/constants";
 import { EntityManager } from "../utils/entityManager";
 import { last, processItem } from "../utils/tools";
@@ -296,7 +297,7 @@ async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
     ids.map((id) => {
       return { tokenId: BigInt(id) };
     }),
-    500
+    MULTICALL_PAGE_SIZE
   );
 
   const positionsData: {
@@ -327,7 +328,7 @@ async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
         fee: p.fee
       };
     }),
-    500
+    MULTICALL_PAGE_SIZE
   );
 
   const positions: Position[] = [];
@@ -358,7 +359,8 @@ async function updateFeeVars(
     POSITIONS_ADDRESS,
     positions.map((p) => {
       return { tokenId: BigInt(p.id) };
-    })
+    }),
+    MULTICALL_PAGE_SIZE
   );
 
   for (let i = 0; i < positions.length; i++) {
