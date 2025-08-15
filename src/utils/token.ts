@@ -13,9 +13,31 @@ export async function fetchTokensSymbol(
   ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
   const symbols = new Map<string, string>();
+
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch symbols individually
+    for (const address of tokenAddresses) {
+      try {
+        const erc20 = new ERC20.Contract(ctx, address);
+        const symbol = await erc20.symbol();
+        symbols.set(address, removeNullBytes(symbol));
+      } catch {
+        try {
+          const erc20Bytes = new ERC20SymbolBytes.Contract(ctx, address);
+          const symbol = await erc20Bytes.symbol();
+          symbols.set(address, removeNullBytes(symbol));
+        } catch {
+          const value = StaticTokenDefinition.fromAddress(address)?.symbol;
+          if (value == null) ctx.log.warn(`Missing symbol for token ${address}`);
+          symbols.set(address, value || "unknown");
+        }
+      }
+    }
+    return symbols;
+  }
+
+  const multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   const results = await multicall.tryAggregate(
     ERC20.functions.symbol,
@@ -46,9 +68,31 @@ export async function fetchTokensName(
   ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
   const names = new Map<string, string>();
+
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch names individually
+    for (const address of tokenAddresses) {
+      try {
+        const erc20 = new ERC20.Contract(ctx, address);
+        const name = await erc20.name();
+        names.set(address, removeNullBytes(name));
+      } catch {
+        try {
+          const erc20Bytes = new ERC20NameBytes.Contract(ctx, address);
+          const name = await erc20Bytes.name();
+          names.set(address, removeNullBytes(name));
+        } catch {
+          const value = StaticTokenDefinition.fromAddress(address)?.name;
+          if (value == null) ctx.log.warn(`Missing name for token ${address}`);
+          names.set(address, value || "unknown");
+        }
+      }
+    }
+    return names;
+  }
+
+  const multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   const results = await multicall.tryAggregate(
     ERC20.functions.name,
@@ -79,8 +123,22 @@ export async function fetchTokensTotalSupply(
   ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
-  //tokenAddresses = ["0x7F5c764cBc14f9669B88837ca1490cCa17c31607"];
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch total supply individually
+    const results = new Map<string, bigint>();
+    for (const address of tokenAddresses) {
+      try {
+        const erc20 = new ERC20.Contract(ctx, address);
+        const supply = await erc20.totalSupply();
+        results.set(address, supply);
+      } catch {
+        results.set(address, 0n);
+      }
+    }
+    return results;
+  }
+
+  let multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   let results = await multicall.tryAggregate(
     ERC20.functions.totalSupply,
@@ -100,7 +158,22 @@ export async function fetchTokensDecimals(
   ctx: BlockHandlerContext<Store>,
   tokenAddresses: string[]
 ) {
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch decimals individually
+    const results = new Map<string, number>();
+    for (const address of tokenAddresses) {
+      try {
+        const erc20 = new ERC20.Contract(ctx, address);
+        const decimals = await erc20.decimals();
+        results.set(address, decimals);
+      } catch {
+        results.set(address, 0);
+      }
+    }
+    return results;
+  }
+
+  let multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   let results = await multicall.tryAggregate(
     ERC20.functions.decimals,

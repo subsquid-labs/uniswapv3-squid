@@ -1357,8 +1357,23 @@ async function updateTickFeeVars(
   ctx: BlockHandlerContext<Store>,
   ticks: Tick[]
 ): Promise<void> {
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch tick data individually
+    for (const tick of ticks) {
+      try {
+        const pool = new poolAbi.Contract(ctx, tick.poolId);
+        const tickData = await pool.ticks(tick.tickIdx);
+        tick.feeGrowthOutside0X128 = tickData.feeGrowthOutside0X128;
+        tick.feeGrowthOutside1X128 = tickData.feeGrowthOutside1X128;
+      } catch (err) {
+        ctx.log.warn(`Failed to fetch tick data for ${tick.id}: ${err}`);
+      }
+    }
+    return;
+  }
+
   // not all ticks are initialized so obtaining null is expected behavior
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  let multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   const tickResult = await multicall.aggregate(
     poolAbi.functions.ticks,
@@ -1380,7 +1395,23 @@ async function updatePoolFeeVars(
   ctx: BlockHandlerContext<Store>,
   pools: Pool[]
 ): Promise<void> {
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: fetch pool fee data individually
+    for (const pool of pools) {
+      try {
+        const poolContract = new poolAbi.Contract(ctx, pool.id);
+        const fee0 = await poolContract.feeGrowthGlobal0X128();
+        const fee1 = await poolContract.feeGrowthGlobal1X128();
+        pool.feeGrowthGlobal0X128 = fee0;
+        pool.feeGrowthGlobal1X128 = fee1;
+      } catch (err) {
+        ctx.log.warn(`Failed to fetch pool fee data for ${pool.id}: ${err}`);
+      }
+    }
+    return;
+  }
+
+  let multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   const calls: [string, {}][] = pools.map((p) => {return [p.id, {}];})
   let fee0 = await multicall.aggregate(

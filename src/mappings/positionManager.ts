@@ -289,6 +289,12 @@ function createPosition(positionId: string) {
 }
 
 async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: Return empty positions for now
+    ctx.log.warn('Multicall disabled: returning empty positions array');
+    return [];
+  }
+
   const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
 
   const positionResults = await multicall.tryAggregate(
@@ -352,7 +358,13 @@ async function updateFeeVars(
   ctx: BlockHandlerContext<Store>,
   positions: Position[]
 ) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  if (!MULTICALL_ADDRESS) {
+    // Fallback: Skip fee updates when multicall is disabled
+    ctx.log.warn('Multicall disabled: skipping position fee updates');
+    return;
+  }
+
+  const multicall = new Multicall(ctx, MULTICALL_ADDRESS!);
 
   const positionResult = await multicall.tryAggregate(
     positionsAbi.functions.positions,

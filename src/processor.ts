@@ -1,5 +1,4 @@
 import fs from 'fs'
-import { lookupArchive } from "@subsquid/archive-registry";
 import {
   FACTORY_ADDRESS,
   FACTORY_DEPLOYED_AT,
@@ -23,10 +22,8 @@ import * as positionsAbi from "./abi/NonfungiblePositionManager";
 const poolsMetadata = JSON.parse(fs.readFileSync("./assets/pools.json", "utf-8")) as { height: number, pools: string[] }
 
 export const processor = new EvmBatchProcessor()
-  .setDataSource({
-    archive: lookupArchive("eth-mainnet"),
-    chain: assertNotNull(process.env.RPC_ETH_HTTP, "Please provide an Ethereum RPC endpoint at RPC_ETH_HTTP"),
-  })
+  .setGateway('https://v2.archive.subsquid.io/network/memecore-mainnet')
+  .setRpcEndpoint('https://rpc.memecore.net')
   .setFinalityConfirmation(75)
   .addLog({
     address: [FACTORY_ADDRESS],
