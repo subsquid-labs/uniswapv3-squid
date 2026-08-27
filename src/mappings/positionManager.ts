@@ -25,6 +25,8 @@ import {
     MULTICALL_ADDRESS,
     MULTICALL_PAGE_SIZE,
     POSITIONS_ADDRESS,
+    SKIPPED_DECREASE_LIQUIDITY_BLOCKS,
+    SKIPPED_POSITION_POOLS,
 } from '../utils/constants'
 import type {Entities} from '../utils/entities'
 import {contractContext} from '../utils/rpc'
@@ -162,8 +164,12 @@ async function initPositions(ids: string[], height: number): Promise<Position[]>
         position.token1Id = positionsData[i].token1Id
         position.poolId = poolIds[i].toLowerCase()
 
-        // temp fix
-        if (position.poolId === '0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248') continue
+        // Inherited skip; see SKIPPED_POSITION_POOLS for what is and is not
+        // known about it. Logged so the gap is visible rather than silent.
+        if (SKIPPED_POSITION_POOLS.has(position.poolId)) {
+            console.warn(`skipping position ${position.id}: pool ${position.poolId} is in SKIPPED_POSITION_POOLS`)
+            continue
+        }
 
         positions.push(position)
     }
@@ -194,8 +200,11 @@ function applyIncreaseLiquidity(entities: Entities, event: PositionEvent): void 
 }
 
 function applyDecreaseLiquidity(entities: Entities, event: PositionEvent): void {
-    // temp fix
-    if (event.blockNumber == 14317993) return
+    // Inherited skip; see SKIPPED_DECREASE_LIQUIDITY_BLOCKS.
+    if (SKIPPED_DECREASE_LIQUIDITY_BLOCKS.has(event.blockNumber)) {
+        console.warn(`skipping DecreaseLiquidity at block ${event.blockNumber}: block is in SKIPPED_DECREASE_LIQUIDITY_BLOCKS`)
+        return
+    }
 
     const position = entities.get(Position, event.tokenId.toString())
     if (position == null) return
@@ -211,8 +220,8 @@ function applyDecreaseLiquidity(entities: Entities, event: PositionEvent): void 
     const amount1 = BigDecimal(data.amount1, token1.decimals).toNumber()
 
     position.liquidity = position.liquidity - data.liquidity
-    position.withdrawnToken0 = position.depositedToken0 + amount0
-    position.withdrawnToken1 = position.depositedToken1 + amount1
+    position.withdrawnToken0 = position.withdrawnToken0 + amount0
+    position.withdrawnToken1 = position.withdrawnToken1 + amount1
 
     entities.set(position)
     updatePositionSnapshot(entities, event, position)
@@ -226,11 +235,13 @@ function applyCollect(entities: Entities, event: PositionEvent): void {
     const data = positionsAbi.events.Collect.decode(event.raw)
 
     const token0 = entities.get(Token, position.token0Id)
-    if (token0 == null) return
+    const token1 = entities.get(Token, position.token1Id)
+    if (token0 == null || token1 == null) return
     const amount0 = BigDecimal(data.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(data.amount1, token1.decimals).toNumber()
 
     position.collectedFeesToken0 = position.collectedFeesToken0 + amount0
-    position.collectedFeesToken1 = position.collectedFeesToken1 + amount0
+    position.collectedFeesToken1 = position.collectedFeesToken1 + amount1
 
     entities.set(position)
     updatePositionSnapshot(entities, event, position)

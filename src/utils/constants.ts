@@ -30,3 +30,18 @@ export const MAX_ADDRESSES_PER_PASS = 5_000
  * Must be >= the finality confirmation used by the data source.
  */
 export const POOL_REGISTRY_REORG_DEPTH = 100
+
+/**
+ * Positions in these pools, and DecreaseLiquidity in these blocks, are skipped.
+ *
+ * Both were inherited from the original mappings, where they were marked only
+ * as "temp fix" with no rationale recorded. Neither has an obvious cause: the
+ * pool below is a normal factory-created pool and its non-USDT side is an
+ * ordinary 18-decimal ERC20. They are kept because removing them would change
+ * indexed output on a guess about what the author was working around, but they
+ * are named and logged here so their effect on completeness is auditable, and
+ * so they can be emptied to find out.
+ */
+export const SKIPPED_POSITION_POOLS = new Set<string>(['0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248'])
+
+export const SKIPPED_DECREASE_LIQUIDITY_BLOCKS = new Set<number>([14317993])
