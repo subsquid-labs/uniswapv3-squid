@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
 import {Tx} from "./tx.model"
 import {Pool} from "./pool.model"
 
@@ -14,9 +14,9 @@ export class Collect {
     @StringColumn_({nullable: false})
     transactionId!: string
 
-    @Index_()
+    @Index_("idx_collect_transaction_3b74f86f")
     @ManyToOne_(() => Tx, {nullable: true})
-    transaction!: Tx
+    transaction!: Relation_<Tx>
 
     @DateTimeColumn_({nullable: false})
     timestamp!: Date
@@ -24,9 +24,9 @@ export class Collect {
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_collect_pool_84e990c2")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: true})
     owner!: string | undefined | null

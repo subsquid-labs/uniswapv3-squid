@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, IntColumn as IntColumn_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, OneToMany as OneToMany_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, IntColumn as IntColumn_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, OneToMany as OneToMany_, Relation as Relation_} from "@subsquid/typeorm-store"
 import {Mint} from "./mint.model"
 import {Burn} from "./burn.model"
 import {Swap} from "./swap.model"
@@ -27,17 +27,17 @@ export class Tx {
     gasPrice!: bigint
 
     @OneToMany_(() => Mint, e => e.transaction)
-    mints!: Mint[]
+    mints!: Relation_<Mint[]>
 
     @OneToMany_(() => Burn, e => e.transaction)
-    burns!: Burn[]
+    burns!: Relation_<Burn[]>
 
     @OneToMany_(() => Swap, e => e.transaction)
-    swaps!: Swap[]
+    swaps!: Relation_<Swap[]>
 
     @OneToMany_(() => Flash, e => e.transaction)
-    flashed!: Flash[]
+    flashed!: Relation_<Flash[]>
 
     @OneToMany_(() => Collect, e => e.transaction)
-    collects!: Collect[]
+    collects!: Relation_<Collect[]>
 }

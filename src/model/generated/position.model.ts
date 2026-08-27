@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
 import {Pool} from "./pool.model"
 import {Token} from "./token.model"
 
@@ -17,23 +17,23 @@ export class Position {
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_position_pool_d67da31b")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     token0Id!: string
 
-    @Index_()
+    @Index_("idx_position_token0_0048e56d")
     @ManyToOne_(() => Token, {nullable: true})
-    token0!: Token
+    token0!: Relation_<Token>
 
     @StringColumn_({nullable: false})
     token1Id!: string
 
-    @Index_()
+    @Index_("idx_position_token1_a9cfb24f")
     @ManyToOne_(() => Token, {nullable: true})
-    token1!: Token
+    token1!: Relation_<Token>
 
     @BigIntColumn_({nullable: false})
     liquidity!: bigint

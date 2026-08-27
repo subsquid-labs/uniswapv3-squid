@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
 import {Pool} from "./pool.model"
 import {Tick} from "./tick.model"
 
@@ -17,16 +17,16 @@ export class TickHourData {
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_tick_hour_data_pool_918b8e67")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     tickId!: string
 
-    @Index_()
+    @Index_("idx_tick_hour_data_tick_fd6fb754")
     @ManyToOne_(() => Tick, {nullable: true})
-    tick!: Tick
+    tick!: Relation_<Tick>
 
     @BigIntColumn_({nullable: false})
     liquidityGross!: bigint

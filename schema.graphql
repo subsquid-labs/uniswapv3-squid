@@ -34,6 +34,22 @@ type Bundle @entity {
   ethPriceUSD: Float!
 }
 
+# Historical ETH/USD, one row per price-changing event on the pricing pool.
+#
+# Bundle.ethPriceUSD is a single mutable scalar, which is only meaningful while
+# it is being written and read in the same chronological sweep. The passes are
+# not one sweep: the pass that indexes the pricing pool runs ahead to the
+# cutoff, so by the time a later pass replays 2021 the scalar holds a 2024
+# price. This table is that scalar's history, so any pass can ask what ETH cost
+# at the exact log it is processing.
+type EthPrice @entity {
+  # `${blockNumber}-${logIndex}` of the event that set this price
+  id: ID!
+  blockNumber: Int! @index
+  logIndex: Int!
+  priceUSD: Float!
+}
+
 type Token @entity {
   # token address
   id: ID!
@@ -76,8 +92,9 @@ type Pool @entity {
   id: ID!
   # creation
   createdAtTimestamp: DateTime!
-  # block pool was created at
-  createdAtBlockNumber: Int!
+  # block pool was created at; indexed because PoolRegistry re-reads the
+  # unfinalized tail of pool creations on every batch
+  createdAtBlockNumber: Int! @index
   # token0
   token0Id: ID!
   token0: Token!
@@ -641,6 +658,14 @@ type TokenDayData @entity {
   low: Float!
   # close price USD
   close: Float!
+  # Position of the events that set `open` and `close`, as
+  # blockNumber * 1e6 + logIndex. A token trades in pools spread across every
+  # pass, so these buckets get written by several passes replaying the same
+  # range in an arbitrary order; keeping the position makes `open` and `close`
+  # an argmin/argmax over the bucket instead of whichever pass wrote last.
+  # Null until a valid price has been seen.
+  openOrder: BigInt
+  closeOrder: BigInt
 }
 
 type TokenHourData @entity {
@@ -673,4 +698,12 @@ type TokenHourData @entity {
   low: Float!
   # close price USD
   close: Float!
+  # Position of the events that set `open` and `close`, as
+  # blockNumber * 1e6 + logIndex. A token trades in pools spread across every
+  # pass, so these buckets get written by several passes replaying the same
+  # range in an arbitrary order; keeping the position makes `open` and `close`
+  # an argmin/argmax over the bucket instead of whichever pass wrote last.
+  # Null until a valid price has been seen.
+  openOrder: BigInt
+  closeOrder: BigInt
 }

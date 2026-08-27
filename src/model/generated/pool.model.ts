@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, IntColumn as IntColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, OneToMany as OneToMany_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, IntColumn as IntColumn_, Index as Index_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Relation as Relation_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, OneToMany as OneToMany_} from "@subsquid/typeorm-store"
 import {Token} from "./token.model"
 import {PoolHourData} from "./poolHourData.model"
 import {PoolDayData} from "./poolDayData.model"
@@ -20,22 +20,23 @@ export class Pool {
     @DateTimeColumn_({nullable: false})
     createdAtTimestamp!: Date
 
+    @Index_("idx_pool_created_at_block_number_8c3eb804")
     @IntColumn_({nullable: false})
     createdAtBlockNumber!: number
 
     @StringColumn_({nullable: false})
     token0Id!: string
 
-    @Index_()
+    @Index_("idx_pool_token0_f90d107b")
     @ManyToOne_(() => Token, {nullable: true})
-    token0!: Token
+    token0!: Relation_<Token>
 
     @StringColumn_({nullable: false})
     token1Id!: string
 
-    @Index_()
+    @Index_("idx_pool_token1_ce96e177")
     @ManyToOne_(() => Token, {nullable: true})
-    token1!: Token
+    token1!: Relation_<Token>
 
     @IntColumn_({nullable: false})
     feeTier!: number
@@ -110,23 +111,23 @@ export class Pool {
     liquidityProviderCount!: bigint
 
     @OneToMany_(() => PoolHourData, e => e.pool)
-    poolHourData!: PoolHourData[]
+    poolHourData!: Relation_<PoolHourData[]>
 
     @OneToMany_(() => PoolDayData, e => e.pool)
-    poolDayData!: PoolDayData[]
+    poolDayData!: Relation_<PoolDayData[]>
 
     @OneToMany_(() => Mint, e => e.pool)
-    mints!: Mint[]
+    mints!: Relation_<Mint[]>
 
     @OneToMany_(() => Burn, e => e.pool)
-    burns!: Burn[]
+    burns!: Relation_<Burn[]>
 
     @OneToMany_(() => Swap, e => e.pool)
-    swaps!: Swap[]
+    swaps!: Relation_<Swap[]>
 
     @OneToMany_(() => Collect, e => e.pool)
-    collects!: Collect[]
+    collects!: Relation_<Collect[]>
 
     @OneToMany_(() => Tick, e => e.pool)
-    ticks!: Tick[]
+    ticks!: Relation_<Tick[]>
 }

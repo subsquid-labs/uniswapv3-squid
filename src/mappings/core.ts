@@ -1,1405 +1,1193 @@
-import { BigDecimal } from "@subsquid/big-decimal";
-import { EvmLog } from "@subsquid/evm-processor/lib/interfaces/evm";
+/**
+ * Level 2 of the entity pipeline: pool state, ticks, the mint/burn/swap history
+ * and the day/hour rollups derived from them.
+ *
+ * The events arrive already decoded, already address-filtered and in chain
+ * order, so this module never looks at a log. It runs in three steps:
+ *
+ *   1. `load()` walks the batch once and states every id it is going to need,
+ *      then fetches each entity class in one query. Nothing below it touches
+ *      the database.
+ *   2. the per-event math, which only reads what step 1 put in memory.
+ *   3. one multicall round per batch for the fee-growth accumulators, which
+ *      are chain state rather than log data.
+ *
+ * Persistence belongs to main.ts, so every entity that is mutated here has to
+ * be handed back to `entities.set()` - reading one through `get()` does not
+ * mark it dirty.
+ */
+import {BigDecimal} from '@subsquid/big-decimal'
+import {Multicall} from '../abi/multicall'
+import * as poolAbi from '../abi/pool'
 import {
-  BlockHandlerContext,
-  LogHandlerContext,
-  BlockHeader,
-} from "../utils/interfaces/interfaces";
-import { DataHandlerContext, assertNotNull } from "@subsquid/evm-processor";
+    Bundle,
+    Burn,
+    EthPrice,
+    Factory,
+    Mint,
+    Pool,
+    PoolDayData,
+    PoolHourData,
+    Swap,
+    Tick,
+    TickDayData,
+    Token,
+    TokenDayData,
+    TokenHourData,
+    Tx,
+    UniswapDayData,
+} from '../model'
+import type {Context, Phase} from '../processor'
+import {safeDiv} from '../utils'
+import {FACTORY_ADDRESS, MULTICALL_ADDRESS, MULTICALL_PAGE_SIZE} from '../utils/constants'
+import type {Entities} from '../utils/entities'
+import {
+    createPoolDayData,
+    createPoolHourData,
+    createTickDayData,
+    createTokenDayData,
+    createTokenHourData,
+    createUniswapDayData,
+    getDayIndex,
+    getHourIndex,
+    snapshotId,
+} from '../utils/intervalUpdates'
+import {
+    getTrackedAmountUSD,
+    MINIMUM_ETH_LOCKED,
+    sqrtPriceX96ToTokenPrices,
+    USDC_WETH_03_POOL,
+    WETH_ADDRESS,
+    WHITELIST_TOKENS,
+} from '../utils/pricing'
+import {contractContext, type ContractContext} from '../utils/rpc'
+import {ethPriceId, LiveEthPrice, RecordedEthPrice, type EthPriceSource} from '../utils/ethPrice'
+import {createTick, feeTierToTickSpacing} from '../utils/tick'
+import type {PoolEvent, TransactionInfo} from './extract'
 
-import { Store } from "@subsquid/typeorm-store";
-import { Multicall } from "../abi/multicall";
-import * as poolAbi from "../abi/pool";
-import {
-  Bundle,
-  Burn,
-  Factory,
-  Mint,
-  Pool,
-  PoolDayData,
-  PoolHourData,
-  Swap,
-  Tick,
-  TickDayData,
-  Token,
-  TokenDayData,
-  TokenHourData,
-  Tx,
-  UniswapDayData,
-} from "../model";
-import { safeDiv } from "../utils";
-import { BlockMap } from "../utils/blockMap";
-import {
-  FACTORY_ADDRESS,
-  MULTICALL_ADDRESS,
-  MULTICALL_PAGE_SIZE,
-} from "../utils/constants";
-import { EntityManager } from "../utils/entityManager";
-import {
-  createPoolDayData,
-  createPoolHourData,
-  createTickDayData,
-  createTokenDayData,
-  createTokenHourData,
-  createUniswapDayData,
-  getDayIndex,
-  getHourIndex,
-  snapshotId,
-} from "../utils/intervalUpdates";
-import {
-  getTrackedAmountUSD,
-  MINIMUM_ETH_LOCKED,
-  sqrtPriceX96ToTokenPrices,
-  STABLE_COINS,
-  USDC_WETH_03_POOL,
-  WETH_ADDRESS,
-  WHITELIST_TOKENS
-} from "../utils/pricing";
-import { createTick, feeTierToTickSpacing } from "../utils/tick";
-import { last, processItem } from "../utils/tools";
-import {
-  BlockData,
-  //Transaction,
-} from "@subsquid/evm-processor/src/interfaces/data";
-import { Transaction } from "../processor";
-type EventData =
-  | (InitializeData & { type: "Initialize" })
-  | (MintData & { type: "Mint" })
-  | (BurnData & { type: "Burn" })
-  | (SwapData & { type: "Swap" });
+type EventOf<K extends PoolEvent['kind']> = Extract<PoolEvent, {kind: K}>
 
-type ContextWithEntityManager = DataHandlerContext<Store> & {
-  entities: EntityManager;
-};
-
-export async function processPairs(
-  ctx: ContextWithEntityManager,
-  blocks: BlockData[]
+export async function applyPoolEvents(
+    ctx: Context,
+    entities: Entities,
+    events: PoolEvent[],
+    phase: Phase
 ): Promise<void> {
-  //console.log("processPairs");
+    if (events.length === 0) return
 
-  let eventsData = await processItems(ctx, blocks);
-  //console.log("processPairs", eventsData);
-  if (!eventsData || eventsData.size == 0) return;
+    await load(entities, events)
 
-  await prefetch(ctx, eventsData);
+    // The phase that indexes the pricing pool reads the price off the live pool
+    // row and records it; every other pass replays what it recorded.
+    const ethPrice: EthPriceSource =
+        phase.kind === 'head' || phase.index === 0
+            ? new LiveEthPrice(entities)
+            : await RecordedEthPrice.load(ctx.store, events[0].blockNumber, events[events.length - 1].blockNumber)
 
-  let bundle = await ctx.store.findOne(Bundle, { where: { id: "1" } });
-  let factory = await ctx.store.findOne(Factory, {
-    where: { id: FACTORY_ADDRESS },
-  });
-
-  for (let [block, blockEventsData] of eventsData) {
-    for (let data of blockEventsData) {
-      switch (data.type) {
-        case "Initialize":
-          await processInitializeData(ctx, block, data);
-          break;
-        case "Mint":
-          await processMintData(ctx, block, data);
-          break;
-        case "Burn":
-          await processBurnData(ctx, block, data);
-          break;
-        case "Swap":
-          await processSwapData(ctx, block, data);
-          break;
-      }
+    for (const event of events) {
+        switch (event.kind) {
+            case 'Initialize':
+                applyInitialize(entities, ethPrice, event)
+                break
+            case 'Mint':
+                applyMint(entities, ethPrice, event)
+                break
+            case 'Burn':
+                applyBurn(entities, ethPrice, event)
+                break
+            case 'Swap':
+                applySwap(entities, ethPrice, event)
+                break
+        }
     }
-  }
 
-  await Promise.all([
-    updatePoolFeeVars(
-      { ...ctx, block: last(blocks).header },
-      ctx.entities.values(Pool)
-    ),
-    updateTickFeeVars(
-      { ...ctx, block: last(blocks).header },
-      ctx.entities.values(Tick)
-    ),
-  ]);
+    await refreshFeeVars(entities, events[events.length - 1].blockNumber)
 }
 
-async function prefetch(
-  ctx: ContextWithEntityManager,
-  eventsData: BlockMap<EventData>
-) {
-  let dayIds = new Set<number>();
-  let hoursIds = new Set<number>();
+/**
+ * Collects every id the batch can possibly touch and fetches it in bulk.
+ *
+ * The pool set is widened two hops: the pools the events name, their tokens,
+ * the whitelist pools those tokens are priced against, and in turn those pools'
+ * tokens. That is exactly how far `getEthPerToken` walks, so anything it asks
+ * for afterwards is already in memory.
+ */
+async function load(entities: Entities, events: PoolEvent[]): Promise<void> {
+    // The USDC/WETH pool is not necessarily traded in this batch, but the ETH
+    // price is read out of it on every event.
+    const poolIds = new Set<string>([USDC_WETH_03_POOL])
+    const tickIds = new Set<string>()
+    const dayIndices = new Set<number>()
+    const hourIndices = new Set<number>()
 
-  for (let [block, blockEventsData] of eventsData) {
-    for (let data of blockEventsData) {
-      switch (data.type) {
-        case "Initialize":
-          ctx.entities.defer(Tick, tickId(data.poolId, data.tick));
-          ctx.entities.defer(Pool, data.poolId);
-          break;
-        case "Mint":
-          ctx.entities.defer(Pool, data.poolId);
-          ctx.entities.defer(
-            Tick,
-            tickId(data.poolId, data.tickLower),
-            tickId(data.poolId, data.tickUpper)
-          );
-          break;
-        case "Burn":
-          ctx.entities.defer(Pool, data.poolId);
-          ctx.entities.defer(
-            Tick,
-            tickId(data.poolId, data.tickLower),
-            tickId(data.poolId, data.tickUpper)
-          );
-          break;
-        case "Swap":
-          ctx.entities.defer(Tick, tickId(data.poolId, data.tick));
-          ctx.entities.defer(Pool, data.poolId);
-          break;
-      }
-    }
-    dayIds.add(getDayIndex(block.timestamp));
-    hoursIds.add(getHourIndex(block.timestamp));
-  }
-
-  let pools = await ctx.entities.load(Pool);
-
-  let poolsTicksIds = collectTicksFromPools(pools.values());
-  let ticks = await ctx.entities.defer(Tick, ...poolsTicksIds).load(Tick);
-
-  let tokenIds = collectTokensFromPools(pools.values());
-  let tokens = await ctx.entities.defer(Token, ...tokenIds).load(Token);
-
-  let whiteListPoolsIds = collectWhiteListPoolsFromTokens(tokens.values());
-  pools = await ctx.entities.defer(Pool, ...whiteListPoolsIds).load(Pool);
-
-  let whiteListPoolsTokenIds = collectTokensFromPools(pools.values());
-  tokens = await ctx.entities
-    .defer(Token, ...whiteListPoolsTokenIds)
-    .load(Token);
-
-  for (let index of dayIds) {
-    ctx.entities.defer(UniswapDayData, snapshotId(FACTORY_ADDRESS, index));
-
-    for (let id of pools.keys()) {
-      ctx.entities.defer(PoolDayData, snapshotId(id, index));
+    for (const event of events) {
+        poolIds.add(event.poolId)
+        switch (event.kind) {
+            case 'Initialize':
+            case 'Swap':
+                tickIds.add(tickId(event.poolId, event.tick))
+                break
+            case 'Mint':
+            case 'Burn':
+                tickIds.add(tickId(event.poolId, event.tickLower))
+                tickIds.add(tickId(event.poolId, event.tickUpper))
+                break
+        }
+        dayIndices.add(getDayIndex(event.timestamp))
+        hourIndices.add(getHourIndex(event.timestamp))
     }
 
-    for (let id of tokens.keys()) {
-      ctx.entities.defer(TokenDayData, snapshotId(id, index));
+    await entities.load(Bundle, ['1'])
+    await entities.load(Factory, [FACTORY_ADDRESS])
+
+    let pools = await entities.load(Pool, poolIds)
+    for (const pool of pools.values()) tickIds.add(tickId(pool.id, pool.tick ?? 0))
+    const ticks = await entities.load(Tick, tickIds)
+
+    let tokens = await entities.load(Token, collectTokens(pools.values()))
+    pools = await entities.load(Pool, collectWhitelistPools(tokens.values()))
+    tokens = await entities.load(Token, collectTokens(pools.values()))
+
+    const uniswapDayIds: string[] = []
+    const poolDayIds: string[] = []
+    const poolHourIds: string[] = []
+    const tokenDayIds: string[] = []
+    const tokenHourIds: string[] = []
+    const tickDayIds: string[] = []
+
+    for (const index of dayIndices) {
+        uniswapDayIds.push(snapshotId(FACTORY_ADDRESS, index))
+        for (const id of pools.keys()) poolDayIds.push(snapshotId(id, index))
+        for (const id of tokens.keys()) tokenDayIds.push(snapshotId(id, index))
+        for (const id of ticks.keys()) tickDayIds.push(snapshotId(id, index))
     }
 
-    for (let id of ticks.keys()) {
-      ctx.entities.defer(TickDayData, snapshotId(id, index));
-    }
-  }
-
-  for (let index of hoursIds) {
-    for (let id of pools.keys()) {
-      ctx.entities.defer(PoolHourData, snapshotId(id, index));
+    for (const index of hourIndices) {
+        for (const id of pools.keys()) poolHourIds.push(snapshotId(id, index))
+        for (const id of tokens.keys()) tokenHourIds.push(snapshotId(id, index))
     }
 
-    for (let id of tokens.keys()) {
-      ctx.entities.defer(TokenHourData, snapshotId(id, index));
-    }
-  }
-
-  await ctx.entities.load(Pool);
-  await ctx.entities.load(Token);
-  await ctx.entities.load(Tick);
-  await ctx.entities.load(UniswapDayData);
-  await ctx.entities.load(PoolDayData);
-  await ctx.entities.load(TokenDayData);
-  await ctx.entities.load(TickDayData);
-  await ctx.entities.load(PoolHourData);
-  await ctx.entities.load(TokenHourData);
+    await entities.load(UniswapDayData, uniswapDayIds)
+    await entities.load(PoolDayData, poolDayIds)
+    await entities.load(TokenDayData, tokenDayIds)
+    await entities.load(TickDayData, tickDayIds)
+    await entities.load(PoolHourData, poolHourIds)
+    await entities.load(TokenHourData, tokenHourIds)
 }
 
-async function processItems(
-  ctx: ContextWithEntityManager,
-  blocks: BlockData[]
-) {
-  let eventsData = new BlockMap<EventData>();
+/**
+ * Appends to the ETH/USD series when the pricing pool's own price moves.
+ *
+ * Only the phase that indexes that pool records; the others read. `priceUSD` is
+ * the value already resolved into the bundle, i.e. the pool's new token0Price.
+ */
+function recordEthPrice(
+    entities: Entities,
+    ethPrice: EthPriceSource,
+    event: {poolId: string; blockNumber: number; logIndex: number},
+    priceUSD: number
+): void {
+    if (!ethPrice.records) return
+    if (event.poolId !== USDC_WETH_03_POOL) return
+    if (!(priceUSD > 0)) return
 
-  for (let block of blocks) {
-    for (let log of block.logs) {
-      let evmLog = {
-        logIndex: log.logIndex,
-        transactionIndex: log.transactionIndex,
-        transactionHash: log.transaction?.hash || "",
-        address: log.address,
-        data: log.data,
-        topics: log.topics,
-      };
-      let pool = await ctx.entities.get(Pool, log.address);
-      if (pool) {
-        //console.log("evmLog", log.topics[0]);
-        switch (log.topics[0]) {
-          case poolAbi.events.Initialize.topic: {
-            let data = processInitialize(evmLog);
-            eventsData.push(block.header, {
-              type: "Initialize",
-              ...data,
-            });
-            break;
-          }
-          case poolAbi.events.Mint.topic: {
-            if (log.transaction != undefined) {
-              let data = processMint(evmLog, log.transaction);
-              eventsData.push(block.header, {
-                type: "Mint",
-                ...data,
-              });
+    entities.set(
+        new EthPrice({
+            id: ethPriceId(event.blockNumber, event.logIndex),
+            blockNumber: event.blockNumber,
+            logIndex: event.logIndex,
+            priceUSD,
+        })
+    )
+}
+
+function applyInitialize(entities: Entities, ethPrice: EthPriceSource, event: EventOf<'Initialize'>): void {
+    const bundle = entities.getOrFail(Bundle, '1')
+
+    const pool = entities.get(Pool, event.poolId)
+    if (pool == null) return
+
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+
+    // update pool sqrt price and tick
+    pool.sqrtPrice = event.sqrtPrice
+    pool.tick = event.tick
+
+    // Calculate and update token prices from sqrtPrice
+    const prices = sqrtPriceX96ToTokenPrices(
+        event.sqrtPrice,
+        token0.decimals,
+        token1.decimals,
+        event.poolId,
+        token0.symbol,
+        token1.symbol,
+        new Date(event.timestamp).toISOString()
+    )
+    pool.token0Price = prices[0]
+    pool.token1Price = prices[1]
+
+    // update token prices
+    token0.derivedETH = getEthPerToken(entities, token0.id)
+    token1.derivedETH = getEthPerToken(entities, token1.id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+    recordEthPrice(entities, ethPrice, event, bundle.ethPriceUSD)
+
+    entities.set(bundle)
+    entities.set(pool)
+    entities.set(token0)
+    entities.set(token1)
+
+    updatePoolDayData(entities, event.timestamp, pool.id)
+    updatePoolHourData(entities, event.timestamp, pool.id)
+    updateTokenDayData(entities, event, token0.id)
+    updateTokenHourData(entities, event, token0.id)
+    updateTokenDayData(entities, event, token1.id)
+    updateTokenHourData(entities, event, token1.id)
+}
+
+function applyMint(entities: Entities, ethPrice: EthPriceSource, event: EventOf<'Mint'>): void {
+    const bundle = entities.getOrFail(Bundle, '1')
+    const factory = entities.getOrFail(Factory, FACTORY_ADDRESS)
+
+    const pool = entities.get(Pool, event.poolId)
+    if (pool == null) return
+
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+
+    const amount0 = BigDecimal(event.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(event.amount1, token1.decimals).toNumber()
+
+    const amountUSD =
+        amount0 * (token0.derivedETH * bundle.ethPriceUSD) + amount1 * (token1.derivedETH * bundle.ethPriceUSD)
+
+    // reset tvl aggregates until new amounts calculated
+    factory.totalValueLockedETH = factory.totalValueLockedETH - pool.totalValueLockedETH
+
+    // update globals
+    factory.txCount++
+
+    // update token0 data
+    token0.txCount++
+    token0.totalValueLocked = token0.totalValueLocked + amount0
+    token0.totalValueLockedUSD = token0.totalValueLocked * (token0.derivedETH * bundle.ethPriceUSD)
+
+    // update token1 data
+    token1.txCount++
+    token1.totalValueLocked = token1.totalValueLocked + amount1
+    token1.totalValueLockedUSD = token1.totalValueLocked * (token1.derivedETH * bundle.ethPriceUSD)
+
+    // pool data
+    pool.txCount++
+
+    // Pools liquidity tracks the currently active liquidity given pools current tick.
+    // We only want to update it on mint if the new position includes the current tick.
+    if (pool.tick != null && event.tickLower <= pool.tick && event.tickUpper > pool.tick) {
+        pool.liquidity += event.amount
+    }
+
+    pool.totalValueLockedToken0 = pool.totalValueLockedToken0 + amount0
+    pool.totalValueLockedToken1 = pool.totalValueLockedToken1 + amount1
+    pool.totalValueLockedETH =
+        pool.totalValueLockedToken0 * token0.derivedETH + pool.totalValueLockedToken1 * token1.derivedETH
+    pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD
+
+    // reset aggregates with new amounts
+    factory.totalValueLockedETH = factory.totalValueLockedETH + pool.totalValueLockedETH
+    factory.totalValueLockedUSD = factory.totalValueLockedETH * bundle.ethPriceUSD
+
+    token0.totalValueLocked = token0.totalValueLocked + amount0
+    token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD
+
+    token1.totalValueLocked = token1.totalValueLocked + amount1
+    token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD
+
+    const transaction = getOrCreateTransaction(entities, event)
+
+    entities.set(
+        new Mint({
+            id: `${pool.id}#${pool.txCount}`,
+            transactionId: transaction.id,
+            timestamp: transaction.timestamp,
+            poolId: pool.id,
+            token0Id: pool.token0Id,
+            token1Id: pool.token1Id,
+            owner: event.owner,
+            sender: event.sender,
+            origin: event.transaction.from,
+            amount: event.amount,
+            amount0,
+            amount1,
+            amountUSD,
+            tickLower: event.tickLower,
+            tickUpper: event.tickUpper,
+            logIndex: event.logIndex,
+        })
+    )
+
+    // tick entities
+    const lowerTickId = tickId(pool.id, event.tickLower)
+    let lowerTick = entities.get(Tick, lowerTickId)
+    if (lowerTick == null) {
+        lowerTick = createTick(lowerTickId, event.tickLower, pool.id)
+        lowerTick.createdAtBlockNumber = event.blockNumber
+        lowerTick.createdAtTimestamp = new Date(event.timestamp)
+    }
+
+    const upperTickId = tickId(pool.id, event.tickUpper)
+    let upperTick = entities.get(Tick, upperTickId)
+    if (upperTick == null) {
+        upperTick = createTick(upperTickId, event.tickUpper, pool.id)
+        upperTick.createdAtBlockNumber = event.blockNumber
+        upperTick.createdAtTimestamp = new Date(event.timestamp)
+    }
+
+    lowerTick.liquidityGross += event.amount
+    lowerTick.liquidityNet += event.amount
+
+    upperTick.liquidityGross += event.amount
+    upperTick.liquidityNet -= event.amount
+
+    entities.set(bundle)
+    entities.set(factory)
+    entities.set(pool)
+    entities.set(token0)
+    entities.set(token1)
+    entities.set(lowerTick)
+    entities.set(upperTick)
+
+    // Update volume metrics
+    updateUniswapDayData(entities, event.timestamp)
+    const poolDayData = updatePoolDayData(entities, event.timestamp, pool.id)
+    const poolHourData = updatePoolHourData(entities, event.timestamp, pool.id)
+    const token0DayData = updateTokenDayData(entities, event, token0.id)
+    const token0HourData = updateTokenHourData(entities, event, token0.id)
+    const token1DayData = updateTokenDayData(entities, event, token1.id)
+    const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    if (poolDayData && poolHourData) {
+        poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD
+        poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0
+        poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1
+
+        poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD
+        poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0
+        poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1
+    }
+
+    token0DayData.volume = token0DayData.volume + amount0
+    token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD
+
+    token0HourData.volume = token0HourData.volume + amount0
+    token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD
+
+    token1DayData.volume = token1DayData.volume + amount1
+    token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD
+
+    token1HourData.volume = token1HourData.volume + amount1
+    token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD
+}
+
+function applyBurn(entities: Entities, ethPrice: EthPriceSource, event: EventOf<'Burn'>): void {
+    const bundle = entities.getOrFail(Bundle, '1')
+    const factory = entities.getOrFail(Factory, FACTORY_ADDRESS)
+
+    const pool = entities.get(Pool, event.poolId)
+    if (pool == null) return
+
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+
+    const amount0 = BigDecimal(event.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(event.amount1, token1.decimals).toNumber()
+
+    const amountUSD =
+        amount0 * (token0.derivedETH * bundle.ethPriceUSD) + amount1 * (token1.derivedETH * bundle.ethPriceUSD)
+
+    // reset tvl aggregates until new amounts calculated
+    factory.totalValueLockedETH = factory.totalValueLockedETH - pool.totalValueLockedETH
+
+    // update globals
+    factory.txCount++
+
+    // update token0 data
+    token0.txCount++
+    token0.totalValueLocked = token0.totalValueLocked - amount0
+    token0.totalValueLockedUSD = token0.totalValueLocked * (token0.derivedETH * bundle.ethPriceUSD)
+
+    // update token1 data
+    token1.txCount++
+    token1.totalValueLocked = token1.totalValueLocked - amount1
+    token1.totalValueLockedUSD = token1.totalValueLocked * (token1.derivedETH * bundle.ethPriceUSD)
+
+    // pool data
+    pool.txCount++
+    // Pools liquidity tracks the currently active liquidity given pools current tick.
+    // We only want to update it on burn if the position being burnt includes the current tick.
+    if (pool.tick != null && event.tickLower <= pool.tick && event.tickUpper > pool.tick) {
+        pool.liquidity -= event.amount
+    }
+
+    pool.totalValueLockedToken0 = pool.totalValueLockedToken0 - amount0
+    pool.totalValueLockedToken1 = pool.totalValueLockedToken1 - amount1
+
+    // Update TVL in ETH and USD
+    pool.totalValueLockedETH =
+        pool.totalValueLockedToken0 * token0.derivedETH + pool.totalValueLockedToken1 * token1.derivedETH
+    pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD
+
+    // Update factory TVL
+    factory.totalValueLockedETH = factory.totalValueLockedETH + pool.totalValueLockedETH
+    factory.totalValueLockedUSD = factory.totalValueLockedETH * bundle.ethPriceUSD
+
+    // Update token TVL
+    token0.totalValueLocked = token0.totalValueLocked - amount0
+    token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD
+
+    token1.totalValueLocked = token1.totalValueLocked - amount1
+    token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD
+
+    // burn entity
+    const transaction = getOrCreateTransaction(entities, event)
+
+    entities.set(
+        new Burn({
+            id: `${pool.id}#${pool.txCount}`,
+            transactionId: transaction.id,
+            timestamp: new Date(event.timestamp),
+            poolId: pool.id,
+            token0Id: pool.token0Id,
+            token1Id: pool.token1Id,
+            owner: event.owner,
+            origin: event.transaction.from,
+            amount: event.amount,
+            amount0,
+            amount1,
+            amountUSD,
+            tickLower: event.tickLower,
+            tickUpper: event.tickUpper,
+            logIndex: event.logIndex,
+        })
+    )
+
+    // tick entities
+    const lowerTick = entities.get(Tick, tickId(pool.id, event.tickLower))
+    const upperTick = entities.get(Tick, tickId(pool.id, event.tickUpper))
+
+    if (lowerTick) {
+        lowerTick.liquidityGross -= event.amount
+        lowerTick.liquidityNet -= event.amount
+        entities.set(lowerTick)
+    }
+
+    if (upperTick) {
+        upperTick.liquidityGross -= event.amount
+        upperTick.liquidityNet += event.amount
+        entities.set(upperTick)
+    }
+
+    entities.set(bundle)
+    entities.set(factory)
+    entities.set(pool)
+    entities.set(token0)
+    entities.set(token1)
+
+    // Update volume metrics
+    updateUniswapDayData(entities, event.timestamp)
+    const poolDayData = updatePoolDayData(entities, event.timestamp, pool.id)
+    const poolHourData = updatePoolHourData(entities, event.timestamp, pool.id)
+    const token0DayData = updateTokenDayData(entities, event, token0.id)
+    const token0HourData = updateTokenHourData(entities, event, token0.id)
+    const token1DayData = updateTokenDayData(entities, event, token1.id)
+    const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    if (poolDayData && poolHourData) {
+        poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD
+        poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0
+        poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1
+
+        poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD
+        poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0
+        poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1
+    }
+
+    token0DayData.volume = token0DayData.volume + amount0
+    token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD
+
+    token0HourData.volume = token0HourData.volume + amount0
+    token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD
+
+    token1DayData.volume = token1DayData.volume + amount1
+    token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD
+
+    token1HourData.volume = token1HourData.volume + amount1
+    token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD
+}
+
+function applySwap(entities: Entities, ethPrice: EthPriceSource, event: EventOf<'Swap'>): void {
+    if (event.poolId == '0x9663f2ca0454accad3e094448ea6f77443880454') return
+
+    const bundle = entities.getOrFail(Bundle, '1')
+    const factory = entities.getOrFail(Factory, FACTORY_ADDRESS)
+
+    const pool = entities.get(Pool, event.poolId)
+    if (pool == null) return
+
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+
+    const amount0 = BigDecimal(event.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(event.amount1, token1.decimals).toNumber()
+
+    // need absolute amounts for volume
+    const amount0Abs = Math.abs(amount0)
+    const amount1Abs = Math.abs(amount1)
+
+    const amount0ETH = amount0Abs * token0.derivedETH
+    const amount1ETH = amount1Abs * token1.derivedETH
+    const amount0USD = amount0ETH * bundle.ethPriceUSD
+    const amount1USD = amount1ETH * bundle.ethPriceUSD
+
+    // get amount that should be tracked only - div 2 because cant count both input and output as volume
+    const amountTotalUSDTracked = getTrackedAmountUSD(token0.id, amount0USD, token1.id, amount1USD)
+
+    const amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
+    const amountTotalUSDUntracked = (amount0USD + amount1USD) / 2
+
+    const feesETH = (Number(amountTotalETHTracked) * Number(pool.feeTier)) / 1000000
+    const feesUSD = (Number(amountTotalUSDTracked) * Number(pool.feeTier)) / 1000000
+
+    // global updates
+    factory.txCount++
+    factory.totalVolumeETH = factory.totalVolumeETH + amountTotalETHTracked
+    factory.totalVolumeUSD = factory.totalVolumeUSD + amountTotalUSDTracked
+    factory.untrackedVolumeUSD = factory.untrackedVolumeUSD + amountTotalUSDUntracked
+    factory.totalFeesETH = factory.totalFeesETH + feesETH
+    factory.totalFeesUSD = factory.totalFeesUSD + feesUSD
+
+    // reset aggregate tvl before individual pool tvl updates
+    const currentPoolTvlETH = pool.totalValueLockedETH
+    factory.totalValueLockedETH = factory.totalValueLockedETH - currentPoolTvlETH
+
+    // pool volume
+    pool.txCount++
+    pool.volumeToken0 = pool.volumeToken0 + amount0Abs
+    pool.volumeToken1 = pool.volumeToken1 + amount1Abs
+    pool.volumeUSD = pool.volumeUSD + amountTotalUSDTracked
+    pool.untrackedVolumeUSD = pool.untrackedVolumeUSD + amountTotalUSDUntracked
+    pool.feesUSD = pool.feesUSD + feesUSD
+
+    // Update the pool with the new active liquidity, price, and tick.
+    pool.liquidity = event.liquidity
+    pool.tick = event.tick
+    pool.sqrtPrice = event.sqrtPrice
+    pool.totalValueLockedToken0 = pool.totalValueLockedToken0 + amount0
+    pool.totalValueLockedToken1 = pool.totalValueLockedToken1 + amount1
+
+    // update token0 data
+    token0.txCount++
+    token0.volume = token0.volume + amount0Abs
+    token0.totalValueLocked = token0.totalValueLocked + amount0
+    token0.volumeUSD = token0.volumeUSD + amountTotalUSDTracked
+    token0.untrackedVolumeUSD = token0.untrackedVolumeUSD + amountTotalUSDUntracked
+    token0.feesUSD = token0.feesUSD + feesUSD
+
+    // update token1 data
+    token1.txCount++
+    token1.volume = token1.volume + amount1Abs
+    token1.totalValueLocked = token1.totalValueLocked + amount1
+    token1.volumeUSD = token1.volumeUSD + amountTotalUSDTracked
+    token1.untrackedVolumeUSD = token1.untrackedVolumeUSD + amountTotalUSDUntracked
+    token1.feesUSD = token1.feesUSD + feesUSD
+
+    // updated pool rates
+    const prices = sqrtPriceX96ToTokenPrices(
+        pool.sqrtPrice,
+        token0.decimals,
+        token1.decimals,
+        pool.id,
+        token0.symbol,
+        token1.symbol,
+        new Date(event.timestamp).toISOString()
+    )
+    pool.token0Price = prices[0]
+    pool.token1Price = prices[1]
+
+    // update USD pricing
+    token0.derivedETH = getEthPerToken(entities, token0.id)
+    token1.derivedETH = getEthPerToken(entities, token1.id)
+
+    bundle.ethPriceUSD = ethPrice.at(event.blockNumber, event.logIndex)
+    recordEthPrice(entities, ethPrice, event, bundle.ethPriceUSD)
+
+    // Things affected by new USD rates
+    pool.totalValueLockedETH =
+        pool.totalValueLockedToken0 * token0.derivedETH + pool.totalValueLockedToken1 * token1.derivedETH
+    pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD
+
+    // Update factory TVL
+    factory.totalValueLockedETH = factory.totalValueLockedETH + pool.totalValueLockedETH
+    factory.totalValueLockedUSD = factory.totalValueLockedETH * bundle.ethPriceUSD
+
+    token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD
+    token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD
+
+    entities.set(bundle)
+    entities.set(factory)
+    entities.set(pool)
+    entities.set(token0)
+    entities.set(token1)
+
+    // interval data
+    const uniswapDayData = updateUniswapDayData(entities, event.timestamp)
+    const poolDayData = updatePoolDayData(entities, event.timestamp, pool.id)
+    const poolHourData = updatePoolHourData(entities, event.timestamp, pool.id)
+    const token0DayData = updateTokenDayData(entities, event, token0.id)
+    const token0HourData = updateTokenHourData(entities, event, token0.id)
+    const token1DayData = updateTokenDayData(entities, event, token1.id)
+    const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked
+    uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked
+    uniswapDayData.feesUSD = uniswapDayData.feesUSD + feesUSD
+
+    // Update volume metrics
+    if (poolDayData && poolHourData) {
+        poolDayData.volumeUSD = poolDayData.volumeUSD + amountTotalUSDTracked
+        poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0Abs
+        poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1Abs
+        poolDayData.feesUSD = poolDayData.feesUSD + feesUSD
+
+        poolHourData.volumeUSD = poolHourData.volumeUSD + amountTotalUSDTracked
+        poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0Abs
+        poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1Abs
+        poolHourData.feesUSD = poolHourData.feesUSD + feesUSD
+    }
+
+    token0DayData.volume = token0DayData.volume + amount0Abs
+    token0DayData.volumeUSD = token0DayData.volumeUSD + amountTotalUSDTracked
+    token0DayData.untrackedVolumeUSD = token0DayData.untrackedVolumeUSD + amountTotalUSDUntracked
+    token0DayData.feesUSD = token0DayData.feesUSD + feesUSD
+
+    token0HourData.volume = token0HourData.volume + amount0Abs
+    token0HourData.volumeUSD = token0HourData.volumeUSD + amountTotalUSDTracked
+    token0HourData.untrackedVolumeUSD = token0HourData.untrackedVolumeUSD + amountTotalUSDUntracked
+    token0HourData.feesUSD = token0HourData.feesUSD + feesUSD
+
+    token1DayData.volume = token1DayData.volume + amount1Abs
+    token1DayData.volumeUSD = token1DayData.volumeUSD + amountTotalUSDTracked
+    token1DayData.untrackedVolumeUSD = token1DayData.untrackedVolumeUSD + amountTotalUSDUntracked
+    token1DayData.feesUSD = token1DayData.feesUSD + feesUSD
+
+    token1HourData.volume = token1HourData.volume + amount1Abs
+    token1HourData.volumeUSD = token1HourData.volumeUSD + amountTotalUSDTracked
+    token1HourData.untrackedVolumeUSD = token1HourData.untrackedVolumeUSD + amountTotalUSDUntracked
+    token1HourData.feesUSD = token1HourData.feesUSD + feesUSD
+
+    // Update inner vars of current or crossed ticks
+    const newTick = event.tick
+    const tickSpacing = feeTierToTickSpacing(pool.feeTier)
+    const modulo = Math.floor(Number(newTick) / Number(tickSpacing))
+    if (modulo == 0) {
+        const tick = createTick(tickId(pool.id, newTick), newTick, pool.id)
+        tick.createdAtBlockNumber = event.blockNumber
+        tick.createdAtTimestamp = new Date(event.timestamp)
+        entities.set(tick)
+    }
+
+    // create Swap event
+    const transaction = getOrCreateTransaction(entities, event)
+
+    const swap = new Swap({id: pool.id + '#' + pool.txCount.toString()})
+    swap.transactionId = transaction.id
+    swap.timestamp = transaction.timestamp
+    swap.poolId = pool.id
+    swap.token0Id = pool.token0Id
+    swap.token1Id = pool.token1Id
+    swap.sender = event.sender
+    swap.origin = event.transaction.from
+    swap.recipient = event.recipient
+    swap.amount0 = amount0
+    swap.amount1 = amount1
+    swap.amountUSD = amountTotalUSDTracked
+    swap.tick = event.tick
+    swap.sqrtPriceX96 = event.sqrtPrice
+    swap.logIndex = event.logIndex
+    entities.set(swap)
+}
+
+/**
+ * ETH per unit of a token, for use while pricing some *other* token.
+ *
+ * `Token.derivedETH` is a stored column, so reading it directly is the same
+ * trap as reading `Bundle.ethPriceUSD` directly: for a whitelisted token the
+ * row holds whatever the last pass to touch it wrote, which is a price from the
+ * cutoff rather than from this block. A whitelisted token's value is a pure
+ * function of the ETH price, so it is recomputed here instead of read. Tokens
+ * that are not whitelisted are priced against pools in their own pass, so their
+ * stored value is already contemporaneous.
+ */
+function derivedEthFor(entities: Entities, token: Token): number {
+    if (token.id.toLowerCase() === WETH_ADDRESS.toLowerCase()) return 1
+    if (WHITELIST_TOKENS.includes(token.id.toLowerCase())) {
+        return safeDiv(1, entities.getOrFail(Bundle, '1').ethPriceUSD)
+    }
+    return token.derivedETH
+}
+
+function getEthPerToken(entities: Entities, tokenId: string): number {
+    const bundle = entities.getOrFail(Bundle, '1')
+    const token = entities.getOrFail(Token, tokenId)
+
+    // Return 1 for WETH
+    if (tokenId.toLowerCase() === WETH_ADDRESS.toLowerCase()) {
+        return 1
+    }
+
+    // for now just take USD from pool with greatest TVL
+    // need to update this to actually detect best rate based on liquidity distribution
+    let largestLiquidityETH = MINIMUM_ETH_LOCKED
+    let priceSoFar = 0
+
+    // Use WHITELIST_TOKENS instead of STABLE_COINS for consistency
+    if (WHITELIST_TOKENS.includes(tokenId.toLowerCase())) {
+        priceSoFar = safeDiv(1, bundle.ethPriceUSD)
+    } else {
+        for (const poolAddress of token.whitelistPools) {
+            const pool = entities.getOrFail(Pool, poolAddress)
+            if (pool.liquidity === 0n) continue
+
+            if (pool.token0Id.toLowerCase() === tokenId.toLowerCase()) {
+                // whitelist token is token1
+                const token1 = entities.getOrFail(Token, pool.token1Id)
+                const derived1 = derivedEthFor(entities, token1)
+                // Skip if token1's price is not derived yet
+                if (derived1 === 0) continue
+
+                // get the derived ETH in pool
+                const ethLocked = pool.totalValueLockedToken1 * derived1
+                if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
+                    largestLiquidityETH = ethLocked
+                    // token1 per our token * Eth per token1
+                    priceSoFar = pool.token1Price * derived1
+                }
             }
-            break;
-          }
-          case poolAbi.events.Burn.topic: {
-            //console.log("Burn");
-            //console.log("log.transaction", log.topics[0]);
-            let data = processBurn(evmLog, log.transaction);
-            eventsData.push(block.header, {
-              type: "Burn",
-              ...data,
-            });
-            break;
-          }
-          case poolAbi.events.Swap.topic: {
-            let data = processSwap(evmLog, log.transaction);
-            eventsData.push(block.header, {
-              type: "Swap",
-              ...data,
-            });
-            break;
-          }
+            if (pool.token1Id.toLowerCase() === tokenId.toLowerCase()) {
+                // whitelist token is token0
+                const token0 = entities.getOrFail(Token, pool.token0Id)
+                const derived0 = derivedEthFor(entities, token0)
+                // Skip if token0's price is not derived yet
+                if (derived0 === 0) continue
+
+                // get the derived ETH in pool
+                const ethLocked = pool.totalValueLockedToken0 * derived0
+                if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
+                    largestLiquidityETH = ethLocked
+                    // token0 per our token * ETH per token0
+                    priceSoFar = pool.token0Price * derived0
+                }
+            }
         }
-      }
     }
-  }
-  //.log("eventsData", eventsData);
-  return eventsData;
+    return priceSoFar
 }
 
-async function processInitializeData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: InitializeData
-) {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
+function updateUniswapDayData(entities: Entities, timestamp: number): UniswapDayData {
+    const uniswap = entities.getOrFail(Factory, FACTORY_ADDRESS)
 
-  let pool = ctx.entities.get(Pool, data.poolId, false);
-  if (pool == null) return;
+    const dayID = getDayIndex(timestamp)
+    const id = snapshotId(FACTORY_ADDRESS, dayID)
 
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+    let uniswapDayData = entities.get(UniswapDayData, id)
+    if (uniswapDayData == null) {
+        uniswapDayData = createUniswapDayData(FACTORY_ADDRESS, dayID)
+    }
+    uniswapDayData.tvlUSD = uniswap.totalValueLockedUSD
+    uniswapDayData.txCount = uniswap.txCount
 
-  // update pool sqrt price and tick
-  pool.sqrtPrice = data.sqrtPrice;
-  pool.tick = data.tick;
-
-  // Calculate and update token prices from sqrtPrice
-  let prices = sqrtPriceX96ToTokenPrices(
-    data.sqrtPrice,
-    token0.decimals,
-    token1.decimals,
-    data.poolId,
-    token0.symbol,
-    token1.symbol,
-    new Date(block.timestamp).toISOString()
-  );
-  pool.token0Price = prices[0];
-  pool.token1Price = prices[1];
-
-  // update token prices
-  token0.derivedETH = await getEthPerToken(ctx, token0.id);
-  token1.derivedETH = await getEthPerToken(ctx, token1.id);
-
-  let usdcPool = await ctx.entities.get(Pool, USDC_WETH_03_POOL);
-  bundle.ethPriceUSD = usdcPool?.token0Price || 0;
-
-  await updatePoolDayData(ctx, block, pool.id);
-  await updatePoolHourData(ctx, block, pool.id);
-  await updateTokenDayData(ctx, block, token0.id);
-  await updateTokenHourData(ctx, block, token0.id);
-  await updateTokenDayData(ctx, block, token1.id);
-  await updateTokenHourData(ctx, block, token1.id);
+    return entities.set(uniswapDayData)
 }
 
-async function processMintData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: MintData
-) {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let factory = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
+function updatePoolDayData(entities: Entities, timestamp: number, poolId: string): PoolDayData | null {
+    const pool = entities.getOrFail(Pool, poolId)
 
-  let pool = ctx.entities.get(Pool, data.poolId, false);
-  if (pool == null) return;
+    // Skip creating records if there's no valid price data
+    if (pool.sqrtPrice === 0n) {
+        return null
+    }
 
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+    const prices = sqrtPriceX96ToTokenPrices(
+        pool.sqrtPrice,
+        token0.decimals,
+        token1.decimals,
+        pool.id,
+        token0.symbol,
+        token1.symbol,
+        new Date(timestamp).toISOString()
+    )
 
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-  let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
+    // Skip if we don't have valid prices
+    if (prices[0] === 0 || prices[1] === 0) {
+        return null
+    }
 
-  let amountUSD =
-    amount0 * (token0.derivedETH * bundle.ethPriceUSD) +
-    amount1 * (token1.derivedETH * bundle.ethPriceUSD);
+    const dayID = getDayIndex(timestamp)
+    const dayPoolID = snapshotId(poolId, dayID)
 
-  // reset tvl aggregates until new amounts calculated
-  factory.totalValueLockedETH =
-    factory.totalValueLockedETH - pool.totalValueLockedETH;
+    let poolDayData = entities.get(PoolDayData, dayPoolID)
+    const isNewEntity = !poolDayData
 
-  // update globals
-  factory.txCount++;
+    if (!poolDayData) {
+        poolDayData = createPoolDayData(poolId, dayID)
+    }
 
-  // update token0 data
-  token0.txCount++;
-  token0.totalValueLocked = token0.totalValueLocked + amount0;
-  token0.totalValueLockedUSD =
-    token0.totalValueLocked * (token0.derivedETH * bundle.ethPriceUSD);
+    // Update prices
+    if (isNewEntity || poolDayData.open === 0) {
+        poolDayData.open = prices[0]
+    }
+    if (isNewEntity || poolDayData.high === 0 || prices[0] > poolDayData.high) {
+        poolDayData.high = prices[0]
+    }
+    if (isNewEntity || poolDayData.low === 0 || prices[0] < poolDayData.low) {
+        poolDayData.low = prices[0]
+    }
+    poolDayData.close = prices[0]
+    poolDayData.token0Price = prices[0]
+    poolDayData.token1Price = prices[1]
 
-  // update token1 data
-  token1.txCount++;
-  token1.totalValueLocked = token1.totalValueLocked + amount1;
-  token1.totalValueLockedUSD =
-    token1.totalValueLocked * (token1.derivedETH * bundle.ethPriceUSD);
+    // Update TVL
+    poolDayData.tvlUSD = pool.totalValueLockedUSD
+    poolDayData.liquidity = pool.liquidity
+    poolDayData.sqrtPrice = pool.sqrtPrice
+    poolDayData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
+    poolDayData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
+    poolDayData.tick = pool.tick
+    poolDayData.txCount = pool.txCount
 
-  // pool data
-  pool.txCount++;
+    return entities.set(poolDayData)
+}
 
-  // Pools liquidity tracks the currently active liquidity given pools current tick.
-  // We only want to update it on mint if the new position includes the current tick.
-  if (
-    pool.tick != null &&
-    data.tickLower <= pool.tick &&
-    data.tickUpper > pool.tick
-  ) {
-    pool.liquidity += data.amount;
-  }
+function updatePoolHourData(entities: Entities, timestamp: number, poolId: string): PoolHourData | null {
+    const pool = entities.getOrFail(Pool, poolId)
 
-  pool.totalValueLockedToken0 = pool.totalValueLockedToken0 + amount0;
-  pool.totalValueLockedToken1 = pool.totalValueLockedToken1 + amount1;
-  pool.totalValueLockedETH =
-    pool.totalValueLockedToken0 * token0.derivedETH +
-    pool.totalValueLockedToken1 * token1.derivedETH;
-  pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD;
+    // Skip creating records if there's no valid price data
+    if (pool.sqrtPrice === 0n) {
+        return null
+    }
 
-  // reset aggregates with new amounts
-  factory.totalValueLockedETH =
-    factory.totalValueLockedETH + pool.totalValueLockedETH;
-  factory.totalValueLockedUSD =
-    factory.totalValueLockedETH * bundle.ethPriceUSD;
+    const token0 = entities.getOrFail(Token, pool.token0Id)
+    const token1 = entities.getOrFail(Token, pool.token1Id)
+    const prices = sqrtPriceX96ToTokenPrices(
+        pool.sqrtPrice,
+        token0.decimals,
+        token1.decimals,
+        pool.id,
+        token0.symbol,
+        token1.symbol,
+        new Date(timestamp).toISOString()
+    )
 
-  token0.totalValueLocked = token0.totalValueLocked + amount0;
-  token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
+    // Skip if we don't have valid prices
+    if (prices[0] === 0 || prices[1] === 0) {
+        return null
+    }
 
-  token1.totalValueLocked = token1.totalValueLocked + amount1;
-  token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
+    const hourIndex = getHourIndex(timestamp)
+    const hourPoolID = snapshotId(poolId, hourIndex)
 
-  let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
-  if (!transaction) {
-    transaction = createTransaction(block, data.transaction);
-    ctx.entities.add(transaction);
-  }
+    let poolHourData = entities.get(PoolHourData, hourPoolID)
+    const isNewEntity = !poolHourData
 
-  ctx.entities.add(
-    new Mint({
-      id: `${pool.id}#${pool.txCount}`,
-      transactionId: transaction.id,
-      timestamp: transaction.timestamp,
-      poolId: pool.id,
-      token0Id: pool.token0Id,
-      token1Id: pool.token1Id,
-      owner: data.owner,
-      sender: data.sender,
-      origin: data.transaction.from,
-      amount: data.amount,
-      amount0,
-      amount1,
-      amountUSD,
-      tickLower: data.tickLower,
-      tickUpper: data.tickUpper,
-      logIndex: data.logIndex,
+    if (!poolHourData) {
+        poolHourData = createPoolHourData(poolId, hourIndex)
+    }
+
+    // Update prices
+    if (isNewEntity || poolHourData.open === 0) {
+        poolHourData.open = prices[0]
+    }
+    if (isNewEntity || poolHourData.high === 0 || prices[0] > poolHourData.high) {
+        poolHourData.high = prices[0]
+    }
+    if (isNewEntity || poolHourData.low === 0 || prices[0] < poolHourData.low) {
+        poolHourData.low = prices[0]
+    }
+    poolHourData.close = prices[0]
+    poolHourData.token0Price = prices[0]
+    poolHourData.token1Price = prices[1]
+
+    // Update TVL
+    poolHourData.tvlUSD = pool.totalValueLockedUSD
+    poolHourData.liquidity = pool.liquidity
+    poolHourData.sqrtPrice = pool.sqrtPrice
+    poolHourData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
+    poolHourData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
+    poolHourData.tick = pool.tick
+    poolHourData.txCount = pool.txCount
+
+    return entities.set(poolHourData)
+}
+
+const LOG_INDEX_SPAN = 1_000_000n
+
+/**
+ * Total order over the chain's logs.
+ *
+ * `logIndex` on EVM is block-scoped - it counts every log in the block, across
+ * all of its transactions - so (block, logIndex) sequences the chain on its own
+ * and no transaction index is needed. The span is far above the number of logs
+ * a block's gas limit allows.
+ */
+function eventOrder(blockNumber: number, logIndex: number): bigint {
+    return BigInt(blockNumber) * LOG_INDEX_SPAN + BigInt(logIndex)
+}
+
+function updateTokenDayData(entities: Entities, event: PoolEvent, tokenId: string): TokenDayData {
+    const bundle = entities.getOrFail(Bundle, '1')
+    const token = entities.getOrFail(Token, tokenId)
+
+    const dayID = getDayIndex(event.timestamp)
+    const tokenDayID = snapshotId(tokenId, dayID)
+
+    let tokenDayData = entities.get(TokenDayData, tokenDayID)
+    const isNewEntity = !tokenDayData
+
+    if (tokenDayData == null) {
+        tokenDayData = createTokenDayData(tokenId, dayID)
+    }
+
+    // Calculate price only if we have valid inputs
+    if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
+        const tokenPrice = token.derivedETH * bundle.ethPriceUSD
+
+        if (tokenPrice > 0) {
+            if (isNewEntity || tokenDayData.high === 0 || tokenPrice > tokenDayData.high) {
+                tokenDayData.high = tokenPrice
+            }
+
+            if (isNewEntity || tokenDayData.low === 0 || tokenPrice < tokenDayData.low) {
+                tokenDayData.low = tokenPrice
+            }
+
+            // A token's buckets are written by every pass that holds one of its
+            // pools, in whatever order the passes run, so the earliest and
+            // latest events have to win on position rather than on write order.
+            const order = eventOrder(event.blockNumber, event.logIndex)
+
+            if (tokenDayData.openOrder == null || order < tokenDayData.openOrder) {
+                tokenDayData.open = tokenPrice
+                tokenDayData.openOrder = order
+            }
+
+            if (tokenDayData.closeOrder == null || order > tokenDayData.closeOrder) {
+                tokenDayData.close = tokenPrice
+                tokenDayData.priceUSD = tokenPrice
+                tokenDayData.closeOrder = order
+            }
+        }
+    }
+
+    // Only update TVL if values are non-zero
+    if (token.totalValueLocked > 0) {
+        tokenDayData.totalValueLocked = token.totalValueLocked
+    }
+    if (token.totalValueLockedUSD > 0) {
+        tokenDayData.totalValueLockedUSD = token.totalValueLockedUSD
+    }
+
+    return entities.set(tokenDayData)
+}
+
+function updateTokenHourData(entities: Entities, event: PoolEvent, tokenId: string): TokenHourData {
+    const bundle = entities.getOrFail(Bundle, '1')
+    const token = entities.getOrFail(Token, tokenId)
+
+    const hourID = getHourIndex(event.timestamp)
+    const tokenHourID = snapshotId(tokenId, hourID)
+
+    let tokenHourData = entities.get(TokenHourData, tokenHourID)
+    const isNewEntity = !tokenHourData
+
+    if (tokenHourData == null) {
+        tokenHourData = createTokenHourData(tokenId, hourID)
+    }
+
+    // Calculate price only if we have valid inputs
+    if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
+        const tokenPrice = token.derivedETH * bundle.ethPriceUSD
+
+        if (tokenPrice > 0) {
+            if (isNewEntity || tokenHourData.high === 0 || tokenPrice > tokenHourData.high) {
+                tokenHourData.high = tokenPrice
+            }
+
+            if (isNewEntity || tokenHourData.low === 0 || tokenPrice < tokenHourData.low) {
+                tokenHourData.low = tokenPrice
+            }
+
+            // A token's buckets are written by every pass that holds one of its
+            // pools, in whatever order the passes run, so the earliest and
+            // latest events have to win on position rather than on write order.
+            const order = eventOrder(event.blockNumber, event.logIndex)
+
+            if (tokenHourData.openOrder == null || order < tokenHourData.openOrder) {
+                tokenHourData.open = tokenPrice
+                tokenHourData.openOrder = order
+            }
+
+            if (tokenHourData.closeOrder == null || order > tokenHourData.closeOrder) {
+                tokenHourData.close = tokenPrice
+                tokenHourData.priceUSD = tokenPrice
+                tokenHourData.closeOrder = order
+            }
+        }
+    }
+
+    // Only update TVL if values are non-zero
+    if (token.totalValueLocked > 0) {
+        tokenHourData.totalValueLocked = token.totalValueLocked
+    }
+    if (token.totalValueLockedUSD > 0) {
+        tokenHourData.totalValueLockedUSD = token.totalValueLockedUSD
+    }
+
+    return entities.set(tokenHourData)
+}
+
+function updateTickDayData(entities: Entities, timestamp: number, id: string): TickDayData {
+    const tick = entities.getOrFail(Tick, id)
+
+    const dayID = getDayIndex(timestamp)
+    const tickDayDataID = snapshotId(id, dayID)
+
+    let tickDayData = entities.get(TickDayData, tickDayDataID)
+    if (tickDayData == null) {
+        tickDayData = createTickDayData(id, dayID)
+    }
+    tickDayData.liquidityGross = tick.liquidityGross
+    tickDayData.liquidityNet = tick.liquidityNet
+    tickDayData.volumeToken0 = tick.volumeToken0
+    tickDayData.volumeToken1 = tick.volumeToken0
+    tickDayData.volumeUSD = tick.volumeUSD
+    tickDayData.feesUSD = tick.feesUSD
+    tickDayData.feeGrowthOutside0X128 = tick.feeGrowthOutside0X128
+    tickDayData.feeGrowthOutside1X128 = tick.feeGrowthOutside1X128
+
+    return entities.set(tickDayData)
+}
+
+function getOrCreateTransaction(entities: Entities, event: PoolEvent): Tx {
+    const existing = entities.get(Tx, event.transaction.hash)
+    if (existing != null) return existing
+
+    return entities.set(createTransaction(event.blockNumber, event.timestamp, event.transaction))
+}
+
+function createTransaction(blockNumber: number, timestamp: number, transaction: TransactionInfo): Tx {
+    return new Tx({
+        id: transaction.hash,
+        blockNumber,
+        timestamp: new Date(timestamp),
+        gasUsed: transaction.gasUsed,
+        gasPrice: transaction.gasPrice,
     })
-  );
-
-  // tick ctx.entities
-  let lowerTickId = tickId(pool.id, data.tickLower);
-  let lowerTick = ctx.entities.get(Tick, lowerTickId, false);
-  if (lowerTick == null) {
-    lowerTick = createTick(lowerTickId, data.tickLower, pool.id);
-    lowerTick.createdAtBlockNumber = block.height;
-    lowerTick.createdAtTimestamp = new Date(block.timestamp);
-    ctx.entities.add(lowerTick);
-  }
-
-  let upperTickId = tickId(pool.id, data.tickUpper);
-  let upperTick = ctx.entities.get(Tick, upperTickId, false);
-  if (upperTick == null) {
-    upperTick = createTick(upperTickId, data.tickUpper, pool.id);
-    upperTick.createdAtBlockNumber = block.height;
-    upperTick.createdAtTimestamp = new Date(block.timestamp);
-    ctx.entities.add(upperTick);
-  }
-
-  lowerTick.liquidityGross += data.amount;
-  lowerTick.liquidityNet += data.amount;
-
-  upperTick.liquidityGross += data.amount;
-  upperTick.liquidityNet -= data.amount;
-
-  // Update volume metrics
-  let uniswapDayData = await updateUniswapDayData(ctx, block);
-  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
-  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
-  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
-  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
-  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
-  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
-
-  if (poolDayData && poolHourData) {
-    poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD;
-    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0;
-    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1;
-
-    poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD;
-    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0;
-    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1;
-  }
-
-  token0DayData.volume = token0DayData.volume + amount0;
-  token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD;
-
-  token0HourData.volume = token0HourData.volume + amount0;
-  token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD;
-
-  token1DayData.volume = token1DayData.volume + amount1;
-  token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD;
-
-  token1HourData.volume = token1HourData.volume + amount1;
-  token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD;
 }
 
-async function processBurnData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: BurnData
-) {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let factory = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
+function collectTokens(pools: Iterable<Pool>): Set<string> {
+    const ids = new Set<string>()
+    for (const pool of pools) {
+        ids.add(pool.token0Id)
+        ids.add(pool.token1Id)
+    }
+    return ids
+}
 
-  let pool = ctx.entities.get(Pool, data.poolId, false);
-  if (pool == null) return;
+function collectWhitelistPools(tokens: Iterable<Token>): Set<string> {
+    const ids = new Set<string>()
+    for (const token of tokens) {
+        for (const id of token.whitelistPools) ids.add(id)
+    }
+    return ids
+}
 
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
+/**
+ * Fee growth is contract state rather than log data, so it is read once per
+ * batch at the last block the batch covers - the same height every pool and
+ * tick is refreshed at, which keeps a batch's reads reproducible.
+ */
+async function refreshFeeVars(entities: Entities, height: number): Promise<void> {
+    // Pass 0 writes a Pool row for every pool in the manifest, including ones
+    // whose events belong to a later pass, and the whitelist hop pulls them
+    // into the working set for pricing. A pool deployed after `height` is then
+    // a row that exists in the database but not yet on the chain: calling into
+    // it returns empty data, which fails to decode and kills the batch. Only
+    // pools the chain already has can be read.
+    const pools = entities.values(Pool).filter((pool) => pool.createdAtBlockNumber <= height)
+    const deployed = new Set(pools.map((pool) => pool.id))
+    const ticks = entities.values(Tick).filter((tick) => deployed.has(tick.poolId))
+    if (pools.length === 0 && ticks.length === 0) return
 
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-  let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
+    const chain = contractContext(height)
 
-  let amountUSD =
-    amount0 * (token0.derivedETH * bundle.ethPriceUSD) +
-    amount1 * (token1.derivedETH * bundle.ethPriceUSD);
+    await Promise.all([updatePoolFeeVars(chain, entities, pools), updateTickFeeVars(chain, entities, ticks)])
+}
 
-  // reset tvl aggregates until new amounts calculated
-  factory.totalValueLockedETH =
-    factory.totalValueLockedETH - pool.totalValueLockedETH;
+async function updateTickFeeVars(chain: ContractContext, entities: Entities, ticks: Tick[]): Promise<void> {
+    if (ticks.length === 0) return
 
-  // update globals
-  factory.txCount++;
+    // not all ticks are initialized so obtaining null is expected behavior
+    const multicall = new Multicall(chain, MULTICALL_ADDRESS)
 
-  // update token0 data
-  token0.txCount++;
-  token0.totalValueLocked = token0.totalValueLocked - amount0;
-  token0.totalValueLockedUSD =
-    token0.totalValueLocked * (token0.derivedETH * bundle.ethPriceUSD);
+    const tickResult = await multicall.aggregate(
+        poolAbi.functions.ticks,
+        ticks.map<[string, {tick: bigint}]>((t) => {
+            return [
+                t.poolId,
+                {
+                    tick: t.tickIdx,
+                },
+            ]
+        }),
+        MULTICALL_PAGE_SIZE
+    )
 
-  // update token1 data
-  token1.txCount++;
-  token1.totalValueLocked = token1.totalValueLocked - amount1;
-  token1.totalValueLockedUSD =
-    token1.totalValueLocked * (token1.derivedETH * bundle.ethPriceUSD);
+    for (let i = 0; i < ticks.length; i++) {
+        ticks[i].feeGrowthOutside0X128 = tickResult[i].feeGrowthOutside0X128
+        ticks[i].feeGrowthOutside1X128 = tickResult[i].feeGrowthOutside1X128
+        entities.set(ticks[i])
+    }
+}
 
-  // pool data
-  pool.txCount++;
-  // Pools liquidity tracks the currently active liquidity given pools current tick.
-  // We only want to update it on burn if the position being burnt includes the current tick.
-  if (
-    pool.tick != null &&
-    data.tickLower <= pool.tick &&
-    data.tickUpper > pool.tick
-  ) {
-    pool.liquidity -= data.amount;
-  }
+async function updatePoolFeeVars(chain: ContractContext, entities: Entities, pools: Pool[]): Promise<void> {
+    if (pools.length === 0) return
 
-  pool.totalValueLockedToken0 = pool.totalValueLockedToken0 - amount0;
-  pool.totalValueLockedToken1 = pool.totalValueLockedToken1 - amount1;
+    const multicall = new Multicall(chain, MULTICALL_ADDRESS)
 
-  // Update TVL in ETH and USD
-  pool.totalValueLockedETH =
-    pool.totalValueLockedToken0 * token0.derivedETH +
-    pool.totalValueLockedToken1 * token1.derivedETH;
-  pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD;
-
-  // Update factory TVL
-  factory.totalValueLockedETH =
-    factory.totalValueLockedETH + pool.totalValueLockedETH;
-  factory.totalValueLockedUSD =
-    factory.totalValueLockedETH * bundle.ethPriceUSD;
-
-  // Update token TVL
-  token0.totalValueLocked = token0.totalValueLocked - amount0;
-  token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
-
-  token1.totalValueLocked = token1.totalValueLocked - amount1;
-  token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
-
-  // burn entity
-  let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
-  if (!transaction) {
-    transaction = createTransaction(block, data.transaction);
-    ctx.entities.add(transaction);
-  }
-
-  ctx.entities.add(
-    new Burn({
-      id: `${pool.id}#${pool.txCount}`,
-      transactionId: transaction.id,
-      timestamp: new Date(block.timestamp),
-      poolId: pool.id,
-      token0Id: pool.token0Id,
-      token1Id: pool.token1Id,
-      owner: data.owner,
-      origin: data.transaction.from,
-      amount: data.amount,
-      amount0,
-      amount1,
-      amountUSD,
-      tickLower: data.tickLower,
-      tickUpper: data.tickUpper,
-      logIndex: data.logIndex,
+    const calls: [string, {}][] = pools.map((p) => {
+        return [p.id, {}]
     })
-  );
+    const fee0 = await multicall.aggregate(poolAbi.functions.feeGrowthGlobal0X128, calls, MULTICALL_PAGE_SIZE)
+    const fee1 = await multicall.aggregate(poolAbi.functions.feeGrowthGlobal1X128, calls, MULTICALL_PAGE_SIZE)
 
-  // tick ctx.entities
-  let lowerTickId = tickId(pool.id, data.tickLower);
-  let lowerTick = await ctx.entities.get(Tick, lowerTickId);
-
-  let upperTickId = tickId(pool.id, data.tickUpper);
-  let upperTick = await ctx.entities.get(Tick, upperTickId);
-
-  if (lowerTick) {
-    lowerTick.liquidityGross -= data.amount;
-    lowerTick.liquidityNet -= data.amount;
-  }
-
-  if (upperTick) {
-    upperTick.liquidityGross -= data.amount;
-    upperTick.liquidityNet += data.amount;
-  }
-
-  // Update volume metrics
-  let uniswapDayData = await updateUniswapDayData(ctx, block);
-  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
-  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
-  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
-  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
-  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
-  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
-
-  if (poolDayData && poolHourData) {
-    poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD;
-    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0;
-    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1;
-
-    poolHourData.volumeUSD = poolHourData.volumeUSD + amountUSD;
-    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0;
-    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1;
-  }
-
-  token0DayData.volume = token0DayData.volume + amount0;
-  token0DayData.volumeUSD = token0DayData.volumeUSD + amountUSD;
-
-  token0HourData.volume = token0HourData.volume + amount0;
-  token0HourData.volumeUSD = token0HourData.volumeUSD + amountUSD;
-
-  token1DayData.volume = token1DayData.volume + amount1;
-  token1DayData.volumeUSD = token1DayData.volumeUSD + amountUSD;
-
-  token1HourData.volume = token1HourData.volume + amount1;
-  token1HourData.volumeUSD = token1HourData.volumeUSD + amountUSD;
-}
-
-async function processSwapData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: SwapData
-): Promise<void> {
-  if (data.poolId == "0x9663f2ca0454accad3e094448ea6f77443880454") return;
-
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let factory = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
-
-  let pool = ctx.entities.get(Pool, data.poolId, false);
-  if (pool == null) return;
-
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
-
-
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-  let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
-
-  let oldTick = pool.tick || 0;
-
-  // need absolute amounts for volume
-  let amount0Abs = Math.abs(amount0);
-  let amount1Abs = Math.abs(amount1);
-
-  let amount0ETH = amount0Abs * token0.derivedETH;
-  let amount1ETH = amount1Abs * token1.derivedETH;
-  let amount0USD = amount0ETH * bundle.ethPriceUSD;
-  let amount1USD = amount1ETH * bundle.ethPriceUSD;
-
-  // get amount that should be tracked only - div 2 because cant count both input and output as volume
-  let amountTotalUSDTracked = getTrackedAmountUSD(
-    token0.id,
-    amount0USD,
-    token1.id,
-    amount1USD
-  );
-
-  let amountTotalETHTracked = safeDiv(
-    amountTotalUSDTracked,
-    bundle.ethPriceUSD
-  );
-  let amountTotalUSDUntracked = (amount0USD + amount1USD) / 2;
-
-  let feesETH =
-    (Number(amountTotalETHTracked) * Number(pool.feeTier)) / 1000000;
-  let feesUSD =
-    (Number(amountTotalUSDTracked) * Number(pool.feeTier)) / 1000000;
-
-  // global updates
-  factory.txCount++;
-  factory.totalVolumeETH = factory.totalVolumeETH + amountTotalETHTracked;
-  factory.totalVolumeUSD = factory.totalVolumeUSD + amountTotalUSDTracked;
-  factory.untrackedVolumeUSD =
-    factory.untrackedVolumeUSD + amountTotalUSDUntracked;
-  factory.totalFeesETH = factory.totalFeesETH + feesETH;
-  factory.totalFeesUSD = factory.totalFeesUSD + feesUSD;
-
-  // reset aggregate tvl before individual pool tvl updates
-  let currentPoolTvlETH = pool.totalValueLockedETH;
-  factory.totalValueLockedETH = factory.totalValueLockedETH - currentPoolTvlETH;
-
-  // pool volume
-  pool.txCount++;
-  pool.volumeToken0 = pool.volumeToken0 + amount0Abs;
-  pool.volumeToken1 = pool.volumeToken1 + amount1Abs;
-  pool.volumeUSD = pool.volumeUSD + amountTotalUSDTracked;
-  pool.untrackedVolumeUSD = pool.untrackedVolumeUSD + amountTotalUSDUntracked;
-  pool.feesUSD = pool.feesUSD + feesUSD;
-
-  // Update the pool with the new active liquidity, price, and tick.
-  pool.liquidity = data.liquidity;
-  pool.tick = data.tick;
-  pool.sqrtPrice = data.sqrtPrice;
-  pool.totalValueLockedToken0 = pool.totalValueLockedToken0 + amount0;
-  pool.totalValueLockedToken1 = pool.totalValueLockedToken1 + amount1;
-
-  // update token0 data
-  token0.txCount++;
-  token0.volume = token0.volume + amount0Abs;
-  token0.totalValueLocked = token0.totalValueLocked + amount0;
-  token0.volumeUSD = token0.volumeUSD + amountTotalUSDTracked;
-  token0.untrackedVolumeUSD =
-    token0.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token0.feesUSD = token0.feesUSD + feesUSD;
-
-  // update token1 data
-  token1.txCount++;
-  token1.volume = token1.volume + amount1Abs;
-  token1.totalValueLocked = token1.totalValueLocked + amount1;
-  token1.volumeUSD = token1.volumeUSD + amountTotalUSDTracked;
-  token1.untrackedVolumeUSD =
-    token1.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token1.feesUSD = token1.feesUSD + feesUSD;
-
-  // updated pool ratess
-  let prices = sqrtPriceX96ToTokenPrices(
-    pool.sqrtPrice,
-    token0.decimals,
-    token1.decimals,
-    pool.id,
-    token0.symbol,
-    token1.symbol,
-    new Date(block.timestamp).toISOString()
-  );
-  pool.token0Price = prices[0];
-  pool.token1Price = prices[1];
-
-  // update USD pricing
-  token0.derivedETH = await getEthPerToken(ctx, token0.id);
-  token1.derivedETH = await getEthPerToken(ctx, token1.id);
-
-  let usdcPool = await ctx.entities.get(Pool, USDC_WETH_03_POOL);
-  bundle.ethPriceUSD = usdcPool?.token0Price || 0;
-
-  // Things afffected by new USD rates
-  pool.totalValueLockedETH =
-    pool.totalValueLockedToken0 * token0.derivedETH +
-    pool.totalValueLockedToken1 * token1.derivedETH;
-  pool.totalValueLockedUSD = pool.totalValueLockedETH * bundle.ethPriceUSD;
-
-  // Update factory TVL
-  factory.totalValueLockedETH =
-    factory.totalValueLockedETH + pool.totalValueLockedETH;
-  factory.totalValueLockedUSD =
-    factory.totalValueLockedETH * bundle.ethPriceUSD;
-
-  token0.totalValueLockedUSD =
-    token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD;
-  token1.totalValueLockedUSD =
-    token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD;
-
-
-
-  // // interval data
-  let uniswapDayData = await updateUniswapDayData(ctx, block);
-  let poolDayData = await updatePoolDayData(ctx, block, pool.id);
-  let poolHourData = await updatePoolHourData(ctx, block, pool.id);
-  let token0DayData = await updateTokenDayData(ctx, block, token0.id);
-  let token0HourData = await updateTokenHourData(ctx, block, token0.id);
-  let token1DayData = await updateTokenDayData(ctx, block, token1.id);
-  let token1HourData = await updateTokenHourData(ctx, block, token1.id);
-
-  uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked;
-  uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked;
-  uniswapDayData.feesUSD = uniswapDayData.feesUSD + feesUSD;
-  // Update volume metrics
-  if (poolDayData && poolHourData) {
-    poolDayData.volumeUSD = poolDayData.volumeUSD + amountTotalUSDTracked;
-    poolDayData.volumeToken0 = poolDayData.volumeToken0 + amount0Abs;
-    poolDayData.volumeToken1 = poolDayData.volumeToken1 + amount1Abs;
-    poolDayData.feesUSD = poolDayData.feesUSD + feesUSD;
-
-    poolHourData.volumeUSD = poolHourData.volumeUSD + amountTotalUSDTracked;
-    poolHourData.volumeToken0 = poolHourData.volumeToken0 + amount0Abs;
-    poolHourData.volumeToken1 = poolHourData.volumeToken1 + amount1Abs;
-    poolHourData.feesUSD = poolHourData.feesUSD + feesUSD;
-  }
-
-  token0DayData.volume = token0DayData.volume + amount0Abs;
-  token0DayData.volumeUSD = token0DayData.volumeUSD + amountTotalUSDTracked;
-  token0DayData.untrackedVolumeUSD =
-    token0DayData.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token0DayData.feesUSD = token0DayData.feesUSD + feesUSD;
-
-  token0HourData.volume = token0HourData.volume + amount0Abs;
-  token0HourData.volumeUSD = token0HourData.volumeUSD + amountTotalUSDTracked;
-  token0HourData.untrackedVolumeUSD =
-    token0HourData.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token0HourData.feesUSD = token0HourData.feesUSD + feesUSD;
-
-  token1DayData.volume = token1DayData.volume + amount1Abs;
-  token1DayData.volumeUSD = token1DayData.volumeUSD + amountTotalUSDTracked;
-  token1DayData.untrackedVolumeUSD =
-    token1DayData.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token1DayData.feesUSD = token1DayData.feesUSD + feesUSD;
-
-  token1HourData.volume = token1HourData.volume + amount1Abs;
-  token1HourData.volumeUSD = token1HourData.volumeUSD + amountTotalUSDTracked;
-  token1HourData.untrackedVolumeUSD =
-    token1HourData.untrackedVolumeUSD + amountTotalUSDUntracked;
-  token1HourData.feesUSD = token1HourData.feesUSD + feesUSD;
-
-  // Update inner vars of current or crossed ticks
-  let newTick = pool.tick;
-  let tickSpacing = feeTierToTickSpacing(pool.feeTier);
-  let modulo = Math.floor(Number(newTick) / Number(tickSpacing));
-  if (modulo == 0) {
-    let tick = createTick(tickId(pool.id, newTick), newTick, pool.id);
-    tick.createdAtBlockNumber = block.height;
-    tick.createdAtTimestamp = new Date(block.timestamp);
-    ctx.entities.add(tick);
-  }
-
-  // create Swap event
-  let transaction = ctx.entities.get(Tx, data.transaction.hash, false);
-  if (!transaction) {
-    transaction = createTransaction(block, data.transaction);
-    ctx.entities.add(transaction);
-  }
-
-  let swap = new Swap({ id: pool.id + "#" + pool.txCount.toString() });
-  swap.transactionId = transaction.id;
-  swap.timestamp = transaction.timestamp;
-  swap.poolId = pool.id;
-  swap.token0Id = pool.token0Id;
-  swap.token1Id = pool.token1Id;
-  swap.sender = data.sender;
-  swap.origin = data.transaction.from;
-  swap.recipient = data.recipient;
-  swap.amount0 = amount0;
-  swap.amount1 = amount1;
-  swap.amountUSD = amountTotalUSDTracked;
-  swap.tick = data.tick;
-  swap.sqrtPriceX96 = data.sqrtPrice;
-  swap.logIndex = data.logIndex;
-  ctx.entities.add(swap);
-
-}
-
-async function getEthPerToken(
-  ctx: ContextWithEntityManager,
-  tokenId: string
-): Promise<number> {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let token = await ctx.entities.getOrFail(Token, tokenId);
-
-  // Return 1 for WETH
-  if (tokenId.toLowerCase() === WETH_ADDRESS.toLowerCase()) {
-    return 1;
-  }
-
-  // for now just take USD from pool with greatest TVL
-  // need to update this to actually detect best rate based on liquidity distribution
-  let largestLiquidityETH = MINIMUM_ETH_LOCKED;
-  let priceSoFar = 0;
-  let selectedPoolAddress = '';
-
-  // Use WHITELIST_TOKENS instead of STABLE_COINS for consistency
-  if (WHITELIST_TOKENS.includes(tokenId.toLowerCase())) {
-    priceSoFar = safeDiv(1, bundle.ethPriceUSD);
-  } else {
-    for (let poolAddress of token.whitelistPools) {
-      let pool = await ctx.entities.getOrFail(Pool, poolAddress);
-      if (pool.liquidity === 0n) continue;
-
-      if (pool.token0Id.toLowerCase() === tokenId.toLowerCase()) {
-        // whitelist token is token1
-        let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
-        // Skip if token1's price is not derived yet
-        if (token1.derivedETH === 0) continue;
-        
-        // get the derived ETH in pool
-        let ethLocked = pool.totalValueLockedToken1 * token1.derivedETH;
-        if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
-          largestLiquidityETH = ethLocked;
-          // token1 per our token * Eth per token1
-          priceSoFar = pool.token1Price * token1.derivedETH;
-          selectedPoolAddress = poolAddress;
-        }
-      }
-      if (pool.token1Id.toLowerCase() === tokenId.toLowerCase()) {
-        // whitelist token is token0
-        let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-        // Skip if token0's price is not derived yet
-        if (token0.derivedETH === 0) continue;
-        
-        // get the derived ETH in pool
-        let ethLocked = pool.totalValueLockedToken0 * token0.derivedETH;
-        if (ethLocked > largestLiquidityETH && ethLocked >= MINIMUM_ETH_LOCKED) {
-          largestLiquidityETH = ethLocked;
-          // token0 per our token * ETH per token0
-          priceSoFar = pool.token0Price * token0.derivedETH;
-          selectedPoolAddress = poolAddress;
-        }
-      }
+    for (let i = 0; i < pools.length; i++) {
+        pools[i].feeGrowthGlobal0X128 = fee0[i]
+        pools[i].feeGrowthGlobal1X128 = fee1[i]
+        entities.set(pools[i])
     }
-  }
-  return priceSoFar;
 }
 
-async function updateUniswapDayData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader
-): Promise<UniswapDayData> {
-  let uniswap = await ctx.entities.getOrFail(Factory, FACTORY_ADDRESS);
-
-  let dayID = getDayIndex(block.timestamp);
-  let id = snapshotId(FACTORY_ADDRESS, dayID);
-
-  let uniswapDayData = ctx.entities.get(UniswapDayData, id, false);
-  if (uniswapDayData == null) {
-    uniswapDayData = createUniswapDayData(FACTORY_ADDRESS, dayID);
-    ctx.entities.add(uniswapDayData);
-  }
-  uniswapDayData.tvlUSD = uniswap.totalValueLockedUSD;
-  uniswapDayData.txCount = uniswap.txCount;
-
-  return uniswapDayData;
-}
-
-async function updatePoolDayData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  poolId: string
-): Promise<PoolDayData | null> {
-  let pool = await ctx.entities.getOrFail(Pool, poolId);
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-
-  // Skip creating records if there's no valid price data
-  if (pool.sqrtPrice === 0n) {
-    return null;
-  }
-
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
-  let prices = sqrtPriceX96ToTokenPrices(
-    pool.sqrtPrice,
-    token0.decimals,
-    token1.decimals,
-    pool.id,
-    token0.symbol,
-    token1.symbol,
-    new Date(block.timestamp).toISOString()
-  );
-
-  // Skip if we don't have valid prices
-  if (prices[0] === 0 || prices[1] === 0) {
-    return null;
-  }
-
-  let dayID = getDayIndex(block.timestamp);
-  let dayPoolID = snapshotId(poolId, dayID);
-
-  let poolDayData = ctx.entities.get(PoolDayData, dayPoolID, false);
-  let isNewEntity = !poolDayData;
-  
-  if (!poolDayData) {
-    poolDayData = createPoolDayData(poolId, dayID);
-    ctx.entities.add(poolDayData);
-  }
-
-  // Update prices
-  if (isNewEntity || poolDayData.open === 0) {
-    poolDayData.open = prices[0];
-  }
-  if (isNewEntity || poolDayData.high === 0 || prices[0] > poolDayData.high) {
-    poolDayData.high = prices[0];
-  }
-  if (isNewEntity || poolDayData.low === 0 || prices[0] < poolDayData.low) {
-    poolDayData.low = prices[0];
-  }
-  poolDayData.close = prices[0];
-  poolDayData.token0Price = prices[0];
-  poolDayData.token1Price = prices[1];
-
-  // Update TVL
-  poolDayData.tvlUSD = pool.totalValueLockedUSD;
-  poolDayData.liquidity = pool.liquidity;
-  poolDayData.sqrtPrice = pool.sqrtPrice;
-  poolDayData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128;
-  poolDayData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128;
-  poolDayData.tick = pool.tick;
-  poolDayData.txCount = pool.txCount;
-
-  return poolDayData;
-}
-
-async function updatePoolHourData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  poolId: string
-): Promise<PoolHourData | null> {
-  let pool = await ctx.entities.getOrFail(Pool, poolId);
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-
-  // Skip creating records if there's no valid price data
-  if (pool.sqrtPrice === 0n) {
-    return null;
-  }
-
-  let token0 = await ctx.entities.getOrFail(Token, pool.token0Id);
-  let token1 = await ctx.entities.getOrFail(Token, pool.token1Id);
-  let prices = sqrtPriceX96ToTokenPrices(
-    pool.sqrtPrice,
-    token0.decimals,
-    token1.decimals,
-    pool.id,
-    token0.symbol,
-    token1.symbol,
-    new Date(block.timestamp).toISOString()
-  );
-
-  // Skip if we don't have valid prices
-  if (prices[0] === 0 || prices[1] === 0) {
-    return null;
-  }
-
-  let hourIndex = getHourIndex(block.timestamp);
-  let hourPoolID = snapshotId(poolId, hourIndex);
-
-  let poolHourData = ctx.entities.get(PoolHourData, hourPoolID, false);
-  let isNewEntity = !poolHourData;
-  
-  if (!poolHourData) {
-    poolHourData = createPoolHourData(poolId, hourIndex);
-    ctx.entities.add(poolHourData);
-  }
-
-  // Update prices
-  if (isNewEntity || poolHourData.open === 0) {
-    poolHourData.open = prices[0];
-  }
-  if (isNewEntity || poolHourData.high === 0 || prices[0] > poolHourData.high) {
-    poolHourData.high = prices[0];
-  }
-  if (isNewEntity || poolHourData.low === 0 || prices[0] < poolHourData.low) {
-    poolHourData.low = prices[0];
-  }
-  poolHourData.close = prices[0];
-  poolHourData.token0Price = prices[0];
-  poolHourData.token1Price = prices[1];
-
-  // Update TVL
-  poolHourData.tvlUSD = pool.totalValueLockedUSD;
-  poolHourData.liquidity = pool.liquidity;
-  poolHourData.sqrtPrice = pool.sqrtPrice;
-  poolHourData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128;
-  poolHourData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128;
-  poolHourData.tick = pool.tick;
-  poolHourData.txCount = pool.txCount;
-
-  return poolHourData;
-}
-
-async function updateTokenDayData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  tokenId: string
-): Promise<TokenDayData> {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let token = await ctx.entities.getOrFail(Token, tokenId);
-
-  let dayID = getDayIndex(block.timestamp);
-  let tokenDayID = snapshotId(tokenId, dayID);
-
-  let tokenDayData = await ctx.entities.get(TokenDayData, tokenDayID, false);
-  let isNewEntity = !tokenDayData;
-  
-  if (tokenDayData == null) {
-    tokenDayData = createTokenDayData(tokenId, dayID);
-    ctx.entities.add(tokenDayData);
-  }
-
-  // Calculate price only if we have valid inputs
-  if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
-    let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
-
-    if (tokenPrice > 0) {
-      if (isNewEntity || tokenDayData.high === 0 || tokenPrice > tokenDayData.high) {
-        tokenDayData.high = tokenPrice;
-      }
-
-      if (isNewEntity || tokenDayData.low === 0 || tokenPrice < tokenDayData.low) {
-        tokenDayData.low = tokenPrice;
-      }
-
-      tokenDayData.close = tokenPrice;
-      tokenDayData.priceUSD = tokenPrice;
-    }
-  }
-
-  // Only update TVL if values are non-zero
-  if (token.totalValueLocked > 0) {
-    tokenDayData.totalValueLocked = token.totalValueLocked;
-  }
-  if (token.totalValueLockedUSD > 0) {
-    tokenDayData.totalValueLockedUSD = token.totalValueLockedUSD;
-  }
-
-  return tokenDayData;
-}
-
-async function updateTokenHourData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  tokenId: string
-): Promise<TokenHourData> {
-  let bundle = await ctx.entities.getOrFail(Bundle, "1");
-  let token = await ctx.entities.getOrFail(Token, tokenId);
-
-  let hourID = getHourIndex(block.timestamp); 
-  let tokenHourID = snapshotId(tokenId, hourID);
-
-  let tokenHourData = ctx.entities.get(TokenHourData, tokenHourID, false);
-  let isNewEntity = !tokenHourData;
-  
-  if (tokenHourData == null) {
-    tokenHourData = createTokenHourData(tokenId, hourID);
-    ctx.entities.add(tokenHourData);
-  }
-
-  // Calculate price only if we have valid inputs
-  if (token.derivedETH > 0 && bundle.ethPriceUSD > 0) {
-    let tokenPrice = token.derivedETH * bundle.ethPriceUSD;
-
-    if (tokenPrice > 0) {
-      if (isNewEntity || tokenHourData.high === 0 || tokenPrice > tokenHourData.high) {
-        tokenHourData.high = tokenPrice;
-      }
-
-      if (isNewEntity || tokenHourData.low === 0 || tokenPrice < tokenHourData.low) {
-        tokenHourData.low = tokenPrice;
-      }
-
-      tokenHourData.close = tokenPrice;
-      tokenHourData.priceUSD = tokenPrice;
-    }
-  }
-
-  // Only update TVL if values are non-zero
-  if (token.totalValueLocked > 0) {
-    tokenHourData.totalValueLocked = token.totalValueLocked;
-  }
-  if (token.totalValueLockedUSD > 0) {
-    tokenHourData.totalValueLockedUSD = token.totalValueLockedUSD;
-  }
-
-  return tokenHourData;
-}
-
-async function updateTickDayData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  tickId: string
-): Promise<TickDayData> {
-  let tick = await ctx.entities.getOrFail(Tick, tickId);
-
-  let dayID = getDayIndex(block.timestamp);
-  let tickDayDataID = snapshotId(tickId, dayID);
-
-  let tickDayData = await ctx.entities.get(TickDayData, tickDayDataID);
-  if (tickDayData == null) {
-    tickDayData = createTickDayData(tickId, dayID);
-    ctx.entities.add(tickDayData);
-  }
-  tickDayData.liquidityGross = tick.liquidityGross;
-  tickDayData.liquidityNet = tick.liquidityNet;
-  tickDayData.volumeToken0 = tick.volumeToken0;
-  tickDayData.volumeToken1 = tick.volumeToken0;
-  tickDayData.volumeUSD = tick.volumeUSD;
-  tickDayData.feesUSD = tick.feesUSD;
-  tickDayData.feeGrowthOutside0X128 = tick.feeGrowthOutside0X128;
-  tickDayData.feeGrowthOutside1X128 = tick.feeGrowthOutside1X128;
-
-  return tickDayData;
-}
-
-function createTransaction(
-  block: { height: number; timestamp: number },
-  transaction: { hash: string; gasPrice: bigint; gas: bigint }
-) {
-  return new Tx({
-    id: transaction.hash,
-    blockNumber: block.height,
-    timestamp: new Date(block.timestamp),
-    gasUsed: transaction.gas,
-    gasPrice: transaction.gasPrice,
-  });
-}
-
-function collectTokensFromPools(pools: Iterable<Pool>) {
-  let ids = new Set<string>();
-  for (let pool of pools) {
-    ids.add(pool.token0Id);
-    ids.add(pool.token1Id);
-  }
-  return ids;
-}
-
-function collectTicksFromPools(pools: Iterable<Pool>) {
-  let ids = new Set<string>();
-  for (let pool of pools) {
-    ids.add(tickId(pool.id, pool.tick ?? 0));
-  }
-  return ids;
-}
-
-function collectWhiteListPoolsFromTokens(tokens: Iterable<Token>) {
-  let ids = new Set<string>();
-  for (let token of tokens) {
-    token.whitelistPools.forEach((id) => ids.add(id));
-  }
-  return ids;
-}
-
-interface InitializeData {
-  poolId: string;
-  tick: number;
-  sqrtPrice: bigint;
-}
-
-function processInitialize(log: EvmLog): InitializeData {
-  let event = poolAbi.events.Initialize.decode(log);
-  return {
-    poolId: log.address,
-    tick: event.tick,
-    sqrtPrice: event.sqrtPriceX96,
-  };
-}
-
-interface MintData {
-  transaction: { hash: string; gasPrice: bigint; from: string; gas: bigint };
-  poolId: string;
-  amount0: bigint;
-  amount1: bigint;
-  amount: bigint;
-  tickLower: number;
-  tickUpper: number;
-  sender: string;
-  owner: string;
-  logIndex: number;
-}
-
-function processMint(log: EvmLog, transaction: any): MintData {
-  let event = poolAbi.events.Mint.decode(log);
-  return {
-    transaction: {
-      hash: transaction.hash,
-      gasPrice: transaction.gasPrice,
-      from: transaction.from,
-      gas: BigInt(transaction.gasUsed || 0),
-    },
-    poolId: log.address,
-    amount0: event.amount0,
-    amount1: event.amount1,
-    amount: event.amount,
-    tickLower: event.tickLower,
-    tickUpper: event.tickUpper,
-    sender: event.sender,
-    owner: event.owner,
-    logIndex: log.logIndex,
-  };
-}
-
-interface BurnData {
-  transaction: { hash: string; gasPrice: bigint; from: string; gas: bigint };
-  poolId: string;
-  amount0: bigint;
-  amount1: bigint;
-  amount: bigint;
-  tickLower: number;
-  tickUpper: number;
-  owner: string;
-  logIndex: number;
-}
-
-function processBurn(log: EvmLog, transaction: any): BurnData {
-  let event = poolAbi.events.Burn.decode(log);
-  return {
-    transaction: {
-      hash: transaction.hash,
-      gasPrice: transaction.gasPrice,
-      from: transaction.from,
-      gas: BigInt(transaction.gasUsed || 0),
-    },
-    poolId: log.address,
-    amount0: event.amount0,
-    amount1: event.amount1,
-    amount: event.amount,
-    tickLower: event.tickLower,
-    tickUpper: event.tickUpper,
-    owner: event.owner,
-    logIndex: log.logIndex,
-  };
-}
-
-interface SwapData {
-  transaction: { hash: string; gasPrice: bigint; from: string; gas: bigint };
-  poolId: string;
-  amount0: bigint;
-  amount1: bigint;
-  tick: number;
-  sqrtPrice: bigint;
-  sender: string;
-  recipient: string;
-  liquidity: bigint;
-  logIndex: number;
-}
-
-function processSwap(log: EvmLog, transaction: any): SwapData {
-  let event = poolAbi.events.Swap.decode(log);
-  return {
-    transaction: {
-      hash: transaction.hash,
-      gasPrice: transaction.gasPrice,
-      from: transaction.from,
-      gas: BigInt(transaction.gasUsed || 0),
-    },
-    poolId: log.address,
-    amount0: event.amount0,
-    amount1: event.amount1,
-    tick: event.tick,
-    sqrtPrice: event.sqrtPriceX96,
-    sender: event.sender,
-    recipient: event.recipient,
-    logIndex: log.logIndex,
-    liquidity: event.liquidity,
-  };
-}
-
-export async function handleFlash(
-  ctx: LogHandlerContext<Store>
-): Promise<void> {
-  // update fee growth
-  let pool = await ctx.store.get(Pool, ctx.evmLog.address).then(assertNotNull);
-  let poolContract = new poolAbi.Contract(ctx, ctx.evmLog.address);
-  let feeGrowthGlobal0X128 = await poolContract.feeGrowthGlobal0X128();
-  let feeGrowthGlobal1X128 = await poolContract.feeGrowthGlobal1X128();
-  pool.feeGrowthGlobal0X128 = feeGrowthGlobal0X128;
-  pool.feeGrowthGlobal1X128 = feeGrowthGlobal1X128;
-  await ctx.store.save(pool);
-}
-
-async function updateTickFeeVars(
-  ctx: BlockHandlerContext<Store>,
-  ticks: Tick[]
-): Promise<void> {
-  // not all ticks are initialized so obtaining null is expected behavior
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
-  const tickResult = await multicall.aggregate(
-    poolAbi.functions.ticks,
-    ticks.map<[string, {tick: bigint}]>((t) => {
-      return [t.poolId, {
-        tick: t.tickIdx
-      }];
-    }),
-    MULTICALL_PAGE_SIZE
-  );
-
-  for (let i = 0; i < ticks.length; i++) {
-    ticks[i].feeGrowthOutside0X128 = tickResult[i].feeGrowthOutside0X128;
-    ticks[i].feeGrowthOutside1X128 = tickResult[i].feeGrowthOutside1X128;
-  }
-}
-
-async function updatePoolFeeVars(
-  ctx: BlockHandlerContext<Store>,
-  pools: Pool[]
-): Promise<void> {
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
-  const calls: [string, {}][] = pools.map((p) => {return [p.id, {}];})
-  let fee0 = await multicall.aggregate(
-    poolAbi.functions.feeGrowthGlobal0X128,
-    calls,
-    MULTICALL_PAGE_SIZE
-  );
-  let fee1 = await multicall.aggregate(
-    poolAbi.functions.feeGrowthGlobal1X128,
-    calls,
-    MULTICALL_PAGE_SIZE
-  );
-
-  for (let i = 0; i < pools.length; i++) {
-    pools[i].feeGrowthGlobal0X128 = fee0[i];
-    pools[i].feeGrowthGlobal1X128 = fee1[i];
-  }
-}
-
-function tickId(poolId: string, tickIdx: number) {
-  return `${poolId}#${tickIdx}`;
+function tickId(poolId: string, tickIdx: number): string {
+    return `${poolId}#${tickIdx}`
 }

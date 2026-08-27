@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, IntColumn as IntColumn_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, IntColumn as IntColumn_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
 import {Pool} from "./pool.model"
 import {Position} from "./position.model"
 import {Tx} from "./tx.model"
@@ -18,16 +18,16 @@ export class PositionSnapshot {
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_position_snapshot_pool_fb258df8")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     positionId!: string
 
-    @Index_()
+    @Index_("idx_position_snapshot_position_f1acf84d")
     @ManyToOne_(() => Position, {nullable: true})
-    position!: Position
+    position!: Relation_<Position>
 
     @IntColumn_({nullable: false})
     blockNumber!: number
@@ -59,9 +59,9 @@ export class PositionSnapshot {
     @StringColumn_({nullable: false})
     transactionId!: string
 
-    @Index_()
+    @Index_("idx_position_snapshot_transaction_2bf4801c")
     @ManyToOne_(() => Tx, {nullable: true})
-    transaction!: Tx
+    transaction!: Relation_<Tx>
 
     @BigIntColumn_({nullable: false})
     feeGrowthInside0LastX128!: bigint

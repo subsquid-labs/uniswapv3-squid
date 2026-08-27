@@ -1,5 +1,3 @@
-import { EvmBlockHeader } from "@subsquid/evm-processor/src/interfaces/evm";
-import { BatchBlock } from "./interfaces/interfaces";
 import assert from "assert";
 
 export function last<T>(array: T[]): T {
@@ -20,17 +18,6 @@ export function mergeMaps<K, V>(a: Map<K, V>, b: Map<K, V>): Map<K, V> {
 
 export function removeNullBytes(str: string): string {
   return str.replace(/\0/g, "");
-}
-
-export function processItem<I>(
-  blocks: BatchBlock<I>[],
-  fn: (block: EvmBlockHeader, item: I) => void
-) {
-  for (let block of blocks) {
-    for (let item of block.items) {
-      fn(block.header, item);
-    }
-  }
 }
 
 export function* splitIntoBatches<T>(

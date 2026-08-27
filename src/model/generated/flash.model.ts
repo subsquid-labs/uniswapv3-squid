@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_, StringColumn as StringColumn_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, StringColumn as StringColumn_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
 import {Tx} from "./tx.model"
 import {Pool} from "./pool.model"
 
@@ -11,9 +11,9 @@ export class Flash {
     @PrimaryColumn_()
     id!: string
 
-    @Index_()
+    @Index_("idx_flash_transaction_651858e4")
     @ManyToOne_(() => Tx, {nullable: true})
-    transaction!: Tx
+    transaction!: Relation_<Tx>
 
     @StringColumn_({nullable: false})
     transactionId!: string
@@ -24,9 +24,9 @@ export class Flash {
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_flash_pool_76a5bfb4")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     sender!: string
