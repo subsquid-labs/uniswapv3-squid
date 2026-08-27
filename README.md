@@ -128,26 +128,32 @@ What is not additive is how a few buckets record a *level*: they assign the glob
 rather than summing their own contributions.
 
 ```ts
-uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked  // additive, exact
+uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked  // counted, exact
+uniswapDayData.txCount   = uniswapDayData.txCount + 1                        // counted, exact
 uniswapDayData.tvlUSD    = uniswap.totalValueLockedUSD                       // sampled, partial
-uniswapDayData.txCount   = uniswap.txCount                                   // sampled, partial
 ```
 
-A sampled level is taken while only some passes have contributed to the accumulator, so historical
-rows understate it — `txCount` most visibly, since it is cumulative, so an early day ends up holding
-roughly every earlier pass's whole-range total. Position in the bucket cannot repair this the way it
-repairs `open`/`close`: the number is already incomplete at the moment it is written, not merely
-written in the wrong order. This affects:
+A sampled level is read while only some passes have contributed to the accumulator, so the bucket
+records a number that is already incomplete when it is written — which is why position in the
+bucket cannot repair it the way it repairs `open`/`close`.
 
-- `UniswapDayData.tvlUSD` and `.txCount`, which are global.
+`txCount` used to be sampled and is now counted per bucket. That was worth changing on its own
+merits: the schema calls it "number of transactions during period", so sampling a cumulative
+counter was the wrong quantity even in a single-pass sync, and counting is order-independent for
+free.
+
+What remains sampled is genuine levels, where counting is not an option because the field is a
+stock rather than a flow:
+
+- `UniswapDayData.tvlUSD`, which is global.
 - `TokenDayData`/`TokenHourData` `totalValueLocked*`, but **only for the ~22 whitelisted tokens**.
   Every pool holding any other token lives in one pass, so that token's accumulator is complete and
   chronological when its buckets sample it.
 
-`PoolDayData`/`PoolHourData` sample the same way and are exact, because a pool's accumulator is
-written entirely by one pass, in order — which is also why those rows are enough to reconstruct the
-global ones. A reconciliation step over `PoolDayData` would recover them; this squid does not ship
-one.
+`PoolDayData`/`PoolHourData` sample `tvlUSD` the same way and are exact, because a pool's
+accumulator is written entirely by one pass, in order. Making the global and whitelisted-token
+levels exact means accumulating their per-bucket *deltas* during indexing and turning those into
+levels with a prefix sum once every pass has finished; this squid does not ship that step.
 
 ## PoolRegistry and forks
 

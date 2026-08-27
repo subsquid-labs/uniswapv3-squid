@@ -241,8 +241,10 @@ function applyInitialize(entities: Entities, ethPrice: EthPriceSource, event: Ev
     entities.set(token0)
     entities.set(token1)
 
-    updatePoolDayData(entities, event.timestamp, pool.id)
-    updatePoolHourData(entities, event.timestamp, pool.id)
+    // Initialize is not counted in pool.txCount anywhere else, so it must not
+    // count here either.
+    updatePoolDayData(entities, event.timestamp, pool.id, false)
+    updatePoolHourData(entities, event.timestamp, pool.id, false)
     updateTokenDayData(entities, event, token0.id)
     updateTokenHourData(entities, event, token0.id)
     updateTokenDayData(entities, event, token1.id)
@@ -813,12 +815,17 @@ function updateUniswapDayData(entities: Entities, timestamp: number): UniswapDay
         uniswapDayData = createUniswapDayData(FACTORY_ADDRESS, dayID)
     }
     uniswapDayData.tvlUSD = uniswap.totalValueLockedUSD
-    uniswapDayData.txCount = uniswap.txCount
+    // Counted per bucket, not sampled from the global counter. The schema calls
+    // this "number of transactions during period", and a running total sampled
+    // mid-flight is both a different quantity and pass-order dependent: a bucket
+    // is written by every pass with an event in it, so the sample would carry
+    // the earlier passes' whole-range totals. Counting is order-independent.
+    uniswapDayData.txCount = uniswapDayData.txCount + 1
 
     return entities.set(uniswapDayData)
 }
 
-function updatePoolDayData(entities: Entities, timestamp: number, poolId: string): PoolDayData | null {
+function updatePoolDayData(entities: Entities, timestamp: number, poolId: string, countsAsTx = true): PoolDayData | null {
     const pool = entities.getOrFail(Pool, poolId)
 
     // Skip creating records if there's no valid price data
@@ -874,12 +881,17 @@ function updatePoolDayData(entities: Entities, timestamp: number, poolId: string
     poolDayData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
     poolDayData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
     poolDayData.tick = pool.tick
-    poolDayData.txCount = pool.txCount
+    // Counted per bucket, not sampled from the global counter. The schema calls
+    // this "number of transactions during period", and a running total sampled
+    // mid-flight is both a different quantity and pass-order dependent: a bucket
+    // is written by every pass with an event in it, so the sample would carry
+    // the earlier passes' whole-range totals. Counting is order-independent.
+    if (countsAsTx) poolDayData.txCount = poolDayData.txCount + 1
 
     return entities.set(poolDayData)
 }
 
-function updatePoolHourData(entities: Entities, timestamp: number, poolId: string): PoolHourData | null {
+function updatePoolHourData(entities: Entities, timestamp: number, poolId: string, countsAsTx = true): PoolHourData | null {
     const pool = entities.getOrFail(Pool, poolId)
 
     // Skip creating records if there's no valid price data
@@ -935,7 +947,12 @@ function updatePoolHourData(entities: Entities, timestamp: number, poolId: strin
     poolHourData.feeGrowthGlobal0X128 = pool.feeGrowthGlobal0X128
     poolHourData.feeGrowthGlobal1X128 = pool.feeGrowthGlobal1X128
     poolHourData.tick = pool.tick
-    poolHourData.txCount = pool.txCount
+    // Counted per bucket, not sampled from the global counter. The schema calls
+    // this "number of transactions during period", and a running total sampled
+    // mid-flight is both a different quantity and pass-order dependent: a bucket
+    // is written by every pass with an event in it, so the sample would carry
+    // the earlier passes' whole-range totals. Counting is order-independent.
+    if (countsAsTx) poolHourData.txCount = poolHourData.txCount + 1
 
     return entities.set(poolHourData)
 }
