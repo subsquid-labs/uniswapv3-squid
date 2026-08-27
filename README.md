@@ -120,14 +120,34 @@ already written in order.
 Everything keyed by pool is exact, because a pool lives in exactly one pass. So are the token
 buckets' `open`, `close`, `high`, `low`, and the volume and fee sums. One thing is not:
 
-- `UniswapDayData.tvlUSD` and `.txCount`, and the `totalValueLocked*` fields on the token buckets,
-  are snapshots of a running total taken while only some of the pools have been indexed, so
-  historical rows understate them. Position in the bucket cannot fix these the way it fixes
-  `open`/`close`: the number is already wrong when it is written, because the passes that would have
-  added to it have not run yet. The final totals on `Factory` and `Token` are correct once every
-  pass has finished, being sums and per-pool deltas.
+The accumulators themselves are additive — `Factory.txCount` counts up, `Token.totalValueLocked`
+takes signed deltas — so their **final** values are right once every pass has finished, and so are
+the buckets' own `volume*`/`feesUSD`, which accumulate per bucket.
 
-That one is recoverable in a reconciliation step over `PoolDayData`; this squid does not ship one.
+What is not additive is how a few buckets record a *level*: they assign the global accumulator
+rather than summing their own contributions.
+
+```ts
+uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked  // additive, exact
+uniswapDayData.tvlUSD    = uniswap.totalValueLockedUSD                       // sampled, partial
+uniswapDayData.txCount   = uniswap.txCount                                   // sampled, partial
+```
+
+A sampled level is taken while only some passes have contributed to the accumulator, so historical
+rows understate it — `txCount` most visibly, since it is cumulative, so an early day ends up holding
+roughly every earlier pass's whole-range total. Position in the bucket cannot repair this the way it
+repairs `open`/`close`: the number is already incomplete at the moment it is written, not merely
+written in the wrong order. This affects:
+
+- `UniswapDayData.tvlUSD` and `.txCount`, which are global.
+- `TokenDayData`/`TokenHourData` `totalValueLocked*`, but **only for the ~22 whitelisted tokens**.
+  Every pool holding any other token lives in one pass, so that token's accumulator is complete and
+  chronological when its buckets sample it.
+
+`PoolDayData`/`PoolHourData` sample the same way and are exact, because a pool's accumulator is
+written entirely by one pass, in order — which is also why those rows are enough to reconstruct the
+global ones. A reconciliation step over `PoolDayData` would recover them; this squid does not ship
+one.
 
 ## PoolRegistry and forks
 
