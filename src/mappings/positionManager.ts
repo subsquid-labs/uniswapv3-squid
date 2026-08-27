@@ -1,454 +1,330 @@
-import { BigDecimal } from "@subsquid/big-decimal";
+/**
+ * Level 3 - positions.
+ *
+ * Positions sit at the bottom of the entity graph: every one of them refers to
+ * a Pool and to the two Tokens that pool trades, all of which exist by the time
+ * this runs. The NFT id itself is the only thing the logs carry, so a position
+ * that has never been seen before has to be resolved against the position
+ * manager and the factory - one batched contract read for the whole batch,
+ * done once in the load step rather than per event.
+ *
+ * The load step states everything this level reads, in dependency order:
+ * positions first, then the tokens *those* positions name. Nothing below it
+ * touches the store.
+ */
+import {BigDecimal} from '@subsquid/big-decimal'
 
+import {Multicall} from '../abi/multicall'
+import * as factoryAbi from '../abi/factory'
+import * as positionsAbi from '../abi/NonfungiblePositionManager'
+import {Position, PositionSnapshot, Token, Tx} from '../model'
+import type {Context} from '../processor'
 import {
-  BatchBlock,
-  BlockHandlerContext,
-  CommonHandlerContext,
-  LogHandlerContext,
-  LogItem,
-  TransactionItem,
-  BlockHeader,
-} from "../utils/interfaces/interfaces";
-
-import { Multicall } from "../abi/multicall";
-import { Position, PositionSnapshot, Token } from "../model";
-import { BlockMap } from "../utils/blockMap";
-import {
-  ADDRESS_ZERO,
-  FACTORY_ADDRESS,
-  MULTICALL_ADDRESS,
-  POSITIONS_ADDRESS,
-  MULTICALL_PAGE_SIZE,
-} from "../utils/constants";
-import { EntityManager } from "../utils/entityManager";
-import { last, processItem } from "../utils/tools";
-import * as factoryAbi from "./../abi/factory";
-import * as positionsAbi from "./../abi/NonfungiblePositionManager";
-import { BlockData, DataHandlerContext } from "@subsquid/evm-processor";
-import { EvmLog } from "@subsquid/evm-processor/src/interfaces/evm";
-import { Store } from "@subsquid/typeorm-store";
-
-type EventData =
-  | (TransferData & { type: "Transfer" })
-  | (IncreaseData & { type: "Increase" })
-  | (DecreaseData & { type: "Decrease" })
-  | (CollectData & { type: "Collect" });
-
-type ContextWithEntityManager = DataHandlerContext<Store> & {
-  entities: EntityManager;
-};
-
-export async function processPositions(
-  ctx: ContextWithEntityManager,
-  blocks: BlockData[]
-): Promise<void> {
-  const eventsData = processItems(ctx, blocks);
-  if (!eventsData || eventsData.size == 0) return;
-
-  await prefetch(ctx, eventsData, last(blocks).header);
-  // console.log(eventsData);
-  for (const [block, blockEventsData] of eventsData) {
-    for (const data of blockEventsData) {
-      switch (data.type) {
-        case "Increase":
-          await processIncreaseData(ctx, block, data);
-          break;
-        case "Decrease":
-          await processDecreaseData(ctx, block, data);
-          break;
-        case "Collect":
-          await processCollectData(ctx, block, data);
-          break;
-        case "Transfer":
-          await processTransferData(ctx, block, data);
-          break;
-      }
-    }
-  }
-
-  // await updateFeeVars(createContext(last(blocks).header), ctx.entities.values(Position))
-}
-
-async function prefetch(
-  ctx: ContextWithEntityManager,
-  eventsData: BlockMap<EventData>,
-  block: BlockHeader
-) {
-  const positionIds = new Set<string>();
-  for (const [, blockEventsData] of eventsData) {
-    for (const data of blockEventsData) {
-      ctx.entities.defer(Position, data.tokenId);
-      positionIds.add(data.tokenId);
-    }
-  }
-
-  await ctx.entities.load(Position);
-
-  const newPositionIds: string[] = [];
-  for (const id of positionIds) {
-    if (!ctx.entities.get(Position, id, false)) newPositionIds.push(id);
-  }
-
-  const newPositions = await initPositions({ ...ctx, block }, newPositionIds);
-  for (const position of newPositions) {
-    ctx.entities.add(position);
-  }
-
-  for (const position of ctx.entities.values(Position)) {
-    ctx.entities.defer(Token, position.token0Id, position.token1Id);
-  }
-
-  await ctx.entities.load(Token);
-}
-
-function processItems(ctx: CommonHandlerContext<unknown>, blocks: BlockData[]) {
-  let eventsData = new BlockMap<EventData>();
-
-  for (let block of blocks) {
-    for (let log of block.logs) {
-      let evmLog = {
-        logIndex: log.logIndex,
-        transactionIndex: log.transactionIndex,
-        transactionHash: log.transaction?.hash || "",
-        address: log.address,
-        data: log.data,
-        topics: log.topics,
-      };
-      switch (log.topics[0]) {
-        case positionsAbi.events.IncreaseLiquidity.topic: {
-          const data = processInreaseLiquidity(evmLog);
-          eventsData.push(block.header, {
-            type: "Increase",
-            ...data,
-          });
-          break;
-        }
-        case positionsAbi.events.DecreaseLiquidity.topic: {
-          const data = processDecreaseLiquidity(evmLog);
-          eventsData.push(block.header, {
-            type: "Decrease",
-            ...data,
-          });
-          break;
-        }
-        case positionsAbi.events.Collect.topic: {
-          const data = processCollect(evmLog);
-          eventsData.push(block.header, {
-            type: "Collect",
-            ...data,
-          });
-          break;
-        }
-        case positionsAbi.events.Transfer.topic: {
-          const data = processTransafer(evmLog);
-          eventsData.push(block.header, {
-            type: "Transfer",
-            ...data,
-          });
-          break;
-        }
-      }
-    }
-  }
-
-  return eventsData;
-}
-
-async function processIncreaseData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: IncreaseData
-) {
-  let position = ctx.entities.get(Position, data.tokenId, false);
-  if (position == null) return;
-
-  let token0 = await ctx.entities.get(Token, position.token0Id);
-  let token1 = await ctx.entities.get(Token, position.token1Id);
-
-  if (!token0 || !token1) return;
-
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-  let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
-
-  position.liquidity = position.liquidity + data.liquidity;
-  position.depositedToken0 = position.depositedToken0 + amount0;
-  position.depositedToken1 = position.depositedToken1 + amount1;
-
-  updatePositionSnapshot(ctx, block, position.id);
-}
-
-async function processDecreaseData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: DecreaseData
-) {
-  // temp fix
-  if (block.height == 14317993) return;
-
-  let position = ctx.entities.get(Position, data.tokenId, false);
-  if (position == null) return;
-
-  let token0 = await ctx.entities.get(Token, position.token0Id);
-  let token1 = await ctx.entities.get(Token, position.token1Id);
-
-  if (!token0 || !token1) return;
-
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-  let amount1 = BigDecimal(data.amount1, token1.decimals).toNumber();
-
-  position.liquidity = position.liquidity - data.liquidity;
-  position.withdrawnToken0 = position.depositedToken0 + amount0;
-  position.withdrawnToken1 = position.depositedToken1 + amount1;
-
-  updatePositionSnapshot(ctx, block, position.id);
-}
-
-async function processCollectData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: CollectData
-) {
-  let position = ctx.entities.get(Position, data.tokenId, false);
-  // position was not able to be fetched
-  if (position == null) return;
-  //console.log("position", position);
-  //console.log(data);
-  let token0 = ctx.entities.get(Token, position.token0Id, false);
-  if (token0 == null) return;
-  let amount0 = BigDecimal(data.amount0, token0.decimals).toNumber();
-
-  position.collectedFeesToken0 = position.collectedFeesToken0 + amount0;
-  position.collectedFeesToken1 = position.collectedFeesToken1 + amount0;
-
-  updatePositionSnapshot(ctx, block, position.id);
-}
-
-async function processTransferData(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  data: TransferData
-) {
-  let position = ctx.entities.get(Position, data.tokenId, false);
-
-  // position was not able to be fetched
-  if (position == null) return;
-
-  position.owner = data.to;
-
-  updatePositionSnapshot(ctx, block, position.id);
-}
-
-async function updatePositionSnapshot(
-  ctx: ContextWithEntityManager,
-  block: BlockHeader,
-  positionId: string
-) {
-  const position = ctx.entities.getOrFail(Position, positionId, false);
-
-  const positionBlockId = snapshotId(positionId, block.height);
-
-  let positionSnapshot = ctx.entities.get(
-    PositionSnapshot,
-    positionBlockId,
-    false
-  );
-  if (!positionSnapshot) {
-    positionSnapshot = new PositionSnapshot({ id: positionBlockId });
-    ctx.entities.add(positionSnapshot);
-  }
-  positionSnapshot.owner = position.owner;
-  positionSnapshot.pool = position.pool;
-  positionSnapshot.positionId = positionId;
-  positionSnapshot.blockNumber = block.height;
-  positionSnapshot.timestamp = new Date(block.timestamp);
-  positionSnapshot.liquidity = position.liquidity;
-  positionSnapshot.depositedToken0 = position.depositedToken0;
-  positionSnapshot.depositedToken1 = position.depositedToken1;
-  positionSnapshot.withdrawnToken0 = position.withdrawnToken0;
-  positionSnapshot.withdrawnToken1 = position.withdrawnToken1;
-  positionSnapshot.collectedFeesToken0 = position.collectedFeesToken0;
-  positionSnapshot.collectedFeesToken1 = position.collectedFeesToken1;
-  return;
-}
-
-function createPosition(positionId: string) {
-  const position = new Position({ id: positionId });
-
-  position.owner = ADDRESS_ZERO;
-  position.liquidity = 0n;
-  position.depositedToken0 = 0;
-  position.depositedToken1 = 0;
-  position.withdrawnToken0 = 0;
-  position.withdrawnToken1 = 0;
-  position.collectedFeesToken0 = 0;
-  position.collectedFeesToken1 = 0;
-  position.feeGrowthInside0LastX128 = 0n;
-  position.feeGrowthInside1LastX128 = 0n;
-
-  return position;
-}
-
-async function initPositions(ctx: BlockHandlerContext<Store>, ids: string[]) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
-  const positionResults = await multicall.tryAggregate(
-    positionsAbi.functions.positions,
-    POSITIONS_ADDRESS,
-    ids.map((id) => {
-      return { tokenId: BigInt(id) };
-    }),
-    MULTICALL_PAGE_SIZE
-  );
-
-  const positionsData: {
-    positionId: string;
-    token0Id: string;
-    token1Id: string;
-    fee: number;
-  }[] = [];
-  for (let i = 0; i < ids.length; i++) {
-    const result = positionResults[i];
-    if (result.success) {
-      positionsData.push({
-        positionId: ids[i].toLowerCase(),
-        token0Id: result.value.token0.toLowerCase(),
-        token1Id: result.value.token1.toLowerCase(),
-        fee: result.value.fee,
-      });
-    }
-  }
-
-  const poolIds = await multicall.aggregate(
-    factoryAbi.functions.getPool,
+    ADDRESS_ZERO,
     FACTORY_ADDRESS,
-    positionsData.map((p) => {
-      return {
-        tokenA: p.token0Id,
-        tokenB: p.token1Id,
-        fee: p.fee
-      };
-    }),
-    MULTICALL_PAGE_SIZE
-  );
-
-  const positions: Position[] = [];
-  for (let i = 0; i < positionsData.length; i++) {
-    const position = createPosition(positionsData[i].positionId);
-    position.token0Id = positionsData[i].token0Id;
-    position.token1Id = positionsData[i].token1Id;
-    position.poolId = poolIds[i].toLowerCase();
-
-    // temp fix
-    if (position.poolId === "0x8fe8d9bb8eeba3ed688069c3d6b556c9ca258248")
-      continue;
-
-    positions.push(position);
-  }
-
-  return positions;
-}
-
-async function updateFeeVars(
-  ctx: BlockHandlerContext<Store>,
-  positions: Position[]
-) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
-
-  const positionResult = await multicall.tryAggregate(
-    positionsAbi.functions.positions,
+    MULTICALL_ADDRESS,
+    MULTICALL_PAGE_SIZE,
     POSITIONS_ADDRESS,
-    positions.map((p) => {
-      return { tokenId: BigInt(p.id) };
-    }),
-    MULTICALL_PAGE_SIZE
-  );
+    SKIPPED_DECREASE_LIQUIDITY_BLOCKS,
+    SKIPPED_POSITION_POOLS,
+} from '../utils/constants'
+import type {Entities} from '../utils/entities'
+import {contractContext} from '../utils/rpc'
+import type {PositionEvent} from './extract'
 
-  for (let i = 0; i < positions.length; i++) {
-    const result = positionResult[i];
-    if (result.success) {
-      positions[i].feeGrowthInside0LastX128 =
-        result.value.feeGrowthInside0LastX128;
-      positions[i].feeGrowthInside1LastX128 =
-        result.value.feeGrowthInside1LastX128;
+export async function applyPositionEvents(
+    ctx: Context,
+    entities: Entities,
+    events: PositionEvent[]
+): Promise<void> {
+    if (events.length === 0) return
+
+    await load(entities, events)
+
+    for (const event of events) {
+        switch (event.kind) {
+            case 'IncreaseLiquidity':
+                applyIncreaseLiquidity(entities, event)
+                break
+            case 'DecreaseLiquidity':
+                applyDecreaseLiquidity(entities, event)
+                break
+            case 'Collect':
+                applyCollect(entities, event)
+                break
+            case 'Transfer':
+                applyTransfer(entities, event)
+                break
+        }
     }
-  }
 }
 
-function snapshotId(positionId: string, block: number) {
-  return `${positionId}#${block}`;
+/**
+ * Two hops. The ids of the positions the batch touches are known from the
+ * events; the ids of the tokens are not - they are a property of the position,
+ * so the second hop can only be issued once the first one has come back and the
+ * positions that were missing from it have been resolved on chain.
+ */
+async function load(entities: Entities, events: PositionEvent[]): Promise<void> {
+    const positionIds = new Set<string>()
+    const txIds = new Set<string>()
+    const snapshotIds = new Set<string>()
+
+    for (const event of events) {
+        const positionId = event.tokenId.toString()
+        positionIds.add(positionId)
+        txIds.add(event.transaction.hash)
+        snapshotIds.add(snapshotId(positionId, event.blockNumber))
+    }
+
+    await entities.load(Position, positionIds)
+
+    // Anything the store does not have has never been indexed: an NFT id only
+    // becomes a Position row here, and its pool and tokens live on chain.
+    const newPositionIds: string[] = []
+    for (const id of positionIds) {
+        if (!entities.has(Position, id)) newPositionIds.push(id)
+    }
+
+    const height = events[events.length - 1].blockNumber
+    for (const position of await initPositions(newPositionIds, height)) {
+        entities.set(position)
+    }
+
+    // Second hop, widened over every position in the working set - the ones
+    // just created and the ones that came back from the store alike.
+    const tokenIds = new Set<string>()
+    for (const position of entities.values(Position)) {
+        tokenIds.add(position.token0Id)
+        tokenIds.add(position.token1Id)
+    }
+
+    await entities.load(Token, tokenIds)
+    await entities.load(Tx, txIds)
+    await entities.load(PositionSnapshot, snapshotIds)
 }
 
-interface IncreaseData {
-  tokenId: string;
-  amount0: bigint;
-  amount1: bigint;
-  liquidity: bigint;
+/**
+ * Resolves brand new NFT ids into Position rows.
+ *
+ * Two batched reads for the whole batch, not one pair per event: `positions()`
+ * on the position manager gives the token pair and the fee tier, and the fee
+ * tier is what the factory needs to name the pool. State is read at the height
+ * of the last event in the batch, so the two rounds see the same chain state.
+ */
+async function initPositions(ids: string[], height: number): Promise<Position[]> {
+    if (ids.length === 0) return []
+
+    const multicall = new Multicall(contractContext(height), MULTICALL_ADDRESS)
+
+    const positionResults = await multicall.tryAggregate(
+        positionsAbi.functions.positions,
+        POSITIONS_ADDRESS,
+        ids.map((id) => {
+            return {tokenId: BigInt(id)}
+        }),
+        MULTICALL_PAGE_SIZE
+    )
+
+    const positionsData: {
+        positionId: string
+        token0Id: string
+        token1Id: string
+        fee: number
+    }[] = []
+    for (let i = 0; i < ids.length; i++) {
+        const result = positionResults[i]
+        if (result.success) {
+            positionsData.push({
+                positionId: ids[i].toLowerCase(),
+                token0Id: result.value.token0.toLowerCase(),
+                token1Id: result.value.token1.toLowerCase(),
+                fee: result.value.fee,
+            })
+        }
+    }
+
+    const poolIds = await multicall.aggregate(
+        factoryAbi.functions.getPool,
+        FACTORY_ADDRESS,
+        positionsData.map((p) => {
+            return {
+                tokenA: p.token0Id,
+                tokenB: p.token1Id,
+                fee: p.fee,
+            }
+        }),
+        MULTICALL_PAGE_SIZE
+    )
+
+    const positions: Position[] = []
+    for (let i = 0; i < positionsData.length; i++) {
+        const position = createPosition(positionsData[i].positionId)
+        position.token0Id = positionsData[i].token0Id
+        position.token1Id = positionsData[i].token1Id
+        position.poolId = poolIds[i].toLowerCase()
+
+        // Inherited skip; see SKIPPED_POSITION_POOLS for what is and is not
+        // known about it. Logged so the gap is visible rather than silent.
+        if (SKIPPED_POSITION_POOLS.has(position.poolId)) {
+            console.warn(`skipping position ${position.id}: pool ${position.poolId} is in SKIPPED_POSITION_POOLS`)
+            continue
+        }
+
+        positions.push(position)
+    }
+
+    return positions
 }
 
-function processInreaseLiquidity(log: EvmLog): IncreaseData {
-  const event = positionsAbi.events.IncreaseLiquidity.decode(log);
+function applyIncreaseLiquidity(entities: Entities, event: PositionEvent): void {
+    const position = entities.get(Position, event.tokenId.toString())
+    if (position == null) return
 
-  return {
-    tokenId: event.tokenId.toString(),
-    amount0: event.amount0,
-    amount1: event.amount1,
-    liquidity: event.liquidity,
-  };
+    const data = positionsAbi.events.IncreaseLiquidity.decode(event.raw)
+
+    const token0 = entities.get(Token, position.token0Id)
+    const token1 = entities.get(Token, position.token1Id)
+
+    if (!token0 || !token1) return
+
+    const amount0 = BigDecimal(data.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(data.amount1, token1.decimals).toNumber()
+
+    position.liquidity = position.liquidity + data.liquidity
+    position.depositedToken0 = position.depositedToken0 + amount0
+    position.depositedToken1 = position.depositedToken1 + amount1
+
+    entities.set(position)
+    updatePositionSnapshot(entities, event, position)
 }
 
-interface DecreaseData {
-  tokenId: string;
-  amount0: bigint;
-  amount1: bigint;
-  liquidity: bigint;
+function applyDecreaseLiquidity(entities: Entities, event: PositionEvent): void {
+    // Inherited skip; see SKIPPED_DECREASE_LIQUIDITY_BLOCKS.
+    if (SKIPPED_DECREASE_LIQUIDITY_BLOCKS.has(event.blockNumber)) {
+        console.warn(`skipping DecreaseLiquidity at block ${event.blockNumber}: block is in SKIPPED_DECREASE_LIQUIDITY_BLOCKS`)
+        return
+    }
+
+    const position = entities.get(Position, event.tokenId.toString())
+    if (position == null) return
+
+    const data = positionsAbi.events.DecreaseLiquidity.decode(event.raw)
+
+    const token0 = entities.get(Token, position.token0Id)
+    const token1 = entities.get(Token, position.token1Id)
+
+    if (!token0 || !token1) return
+
+    const amount0 = BigDecimal(data.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(data.amount1, token1.decimals).toNumber()
+
+    position.liquidity = position.liquidity - data.liquidity
+    position.withdrawnToken0 = position.withdrawnToken0 + amount0
+    position.withdrawnToken1 = position.withdrawnToken1 + amount1
+
+    entities.set(position)
+    updatePositionSnapshot(entities, event, position)
 }
 
-function processDecreaseLiquidity(log: EvmLog): DecreaseData {
-  const event = positionsAbi.events.DecreaseLiquidity.decode(log);
+function applyCollect(entities: Entities, event: PositionEvent): void {
+    const position = entities.get(Position, event.tokenId.toString())
+    // position was not able to be fetched
+    if (position == null) return
 
-  return {
-    tokenId: event.tokenId.toString(),
-    amount0: event.amount0,
-    amount1: event.amount1,
-    liquidity: event.liquidity,
-  };
+    const data = positionsAbi.events.Collect.decode(event.raw)
+
+    const token0 = entities.get(Token, position.token0Id)
+    const token1 = entities.get(Token, position.token1Id)
+    if (token0 == null || token1 == null) return
+    const amount0 = BigDecimal(data.amount0, token0.decimals).toNumber()
+    const amount1 = BigDecimal(data.amount1, token1.decimals).toNumber()
+
+    position.collectedFeesToken0 = position.collectedFeesToken0 + amount0
+    position.collectedFeesToken1 = position.collectedFeesToken1 + amount1
+
+    entities.set(position)
+    updatePositionSnapshot(entities, event, position)
 }
 
-interface CollectData {
-  tokenId: string;
-  amount0: bigint;
-  amount1: bigint;
+function applyTransfer(entities: Entities, event: PositionEvent): void {
+    const position = entities.get(Position, event.tokenId.toString())
+
+    // position was not able to be fetched
+    if (position == null) return
+
+    const data = positionsAbi.events.Transfer.decode(event.raw)
+
+    position.owner = data.to.toLowerCase()
+
+    entities.set(position)
+    updatePositionSnapshot(entities, event, position)
 }
 
-function processCollect(log: EvmLog): CollectData {
-  const event = positionsAbi.events.Collect.decode(log);
+function updatePositionSnapshot(entities: Entities, event: PositionEvent, position: Position): void {
+    const positionBlockId = snapshotId(position.id, event.blockNumber)
 
-  return {
-    tokenId: event.tokenId.toString(),
-    amount0: event.amount0,
-    amount1: event.amount1,
-  };
+    let positionSnapshot = entities.get(PositionSnapshot, positionBlockId)
+    if (!positionSnapshot) {
+        positionSnapshot = new PositionSnapshot({id: positionBlockId})
+    }
+    positionSnapshot.owner = position.owner
+    positionSnapshot.poolId = position.poolId
+    positionSnapshot.positionId = position.id
+    positionSnapshot.blockNumber = event.blockNumber
+    positionSnapshot.timestamp = new Date(event.timestamp)
+    positionSnapshot.liquidity = position.liquidity
+    positionSnapshot.depositedToken0 = position.depositedToken0
+    positionSnapshot.depositedToken1 = position.depositedToken1
+    positionSnapshot.withdrawnToken0 = position.withdrawnToken0
+    positionSnapshot.withdrawnToken1 = position.withdrawnToken1
+    positionSnapshot.collectedFeesToken0 = position.collectedFeesToken0
+    positionSnapshot.collectedFeesToken1 = position.collectedFeesToken1
+    positionSnapshot.transactionId = getOrCreateTransaction(entities, event).id
+    positionSnapshot.feeGrowthInside0LastX128 = position.feeGrowthInside0LastX128
+    positionSnapshot.feeGrowthInside1LastX128 = position.feeGrowthInside1LastX128
+
+    entities.set(positionSnapshot)
 }
 
-interface TransferData {
-  tokenId: string;
-  to: string;
+/**
+ * A snapshot references the transaction it was taken in, and that row is not
+ * guaranteed to be written by any other level: a position event and the pool
+ * event it accompanies can belong to different passes. The row is upserted with
+ * the same contents wherever it is written from, so producing it here is safe.
+ */
+function getOrCreateTransaction(entities: Entities, event: PositionEvent): Tx {
+    let transaction = entities.get(Tx, event.transaction.hash)
+    if (!transaction) {
+        transaction = new Tx({
+            id: event.transaction.hash,
+            blockNumber: event.blockNumber,
+            timestamp: new Date(event.timestamp),
+            gasUsed: event.transaction.gasUsed,
+            gasPrice: event.transaction.gasPrice,
+        })
+        entities.set(transaction)
+    }
+    return transaction
 }
 
-function processTransafer(log: EvmLog): TransferData {
-  const event = positionsAbi.events.Transfer.decode(log);
+function createPosition(positionId: string): Position {
+    const position = new Position({id: positionId})
 
-  return {
-    tokenId: event.tokenId.toString(),
-    to: event.to.toLowerCase(),
-  };
+    position.owner = ADDRESS_ZERO
+    position.liquidity = 0n
+    position.depositedToken0 = 0
+    position.depositedToken1 = 0
+    position.withdrawnToken0 = 0
+    position.withdrawnToken1 = 0
+    position.collectedFeesToken0 = 0
+    position.collectedFeesToken1 = 0
+    position.feeGrowthInside0LastX128 = 0n
+    position.feeGrowthInside1LastX128 = 0n
+
+    return position
 }
 
-type Item =
-  | LogItem<{
-      evmLog: {
-        topics: true;
-        data: true;
-      };
-    }>
-  | TransactionItem;
+function snapshotId(positionId: string, block: number): string {
+    return `${positionId}#${block}`
+}

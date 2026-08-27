@@ -47,12 +47,17 @@
       "process": {
         "description": "Load .env and start the squid processor",
         "deps": ["build", "migration:apply"],
+        "cmd": ["node", "--require=dotenv/config", "lib/tools/runAll.js"]
+      },
+      "process:phase": {
+        "description": "Run a single phase: pass0, pass1, ... or head",
+        "deps": ["build", "migration:apply"],
         "cmd": ["node", "--require=dotenv/config", "lib/main.js"]
       },
       "process:prod": {
         "description": "Start the squid processor",
         "deps": ["migration:apply"],
-        "cmd": ["node", "lib/main.js"],
+        "cmd": ["node", "lib/tools/runAll.js"],
         "hidden": true
       },
       "serve": {
@@ -80,8 +85,13 @@
         "description": "Open a local browser window",
         "cmd": ["npx", "--yes", "opener"]
       },
+      "finalize": {
+        "description": "Turn the buckets' TVL deltas into levels; run once every pass has finished",
+        "deps": ["build"],
+        "cmd": ["node", "--require=dotenv/config", "lib/tools/finalize.js"]
+      },
       "get-pools": {
-        "description": "Updates assets/pools.json with the most recent list of pools",
+        "description": "Rebuild assets/pools.json: pick a cutoff and split the pools below it into passes",
         "deps": ["build"],
         "cmd": ["node", "--require=dotenv/config", "lib/tools/poolsRetriever.js"]
       }

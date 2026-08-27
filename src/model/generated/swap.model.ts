@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_, StringColumn as StringColumn_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, BigIntColumn as BigIntColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, StringColumn as StringColumn_, DateTimeColumn as DateTimeColumn_, FloatColumn as FloatColumn_, BigIntColumn as BigIntColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
 import {Tx} from "./tx.model"
 import {Pool} from "./pool.model"
 import {Token} from "./token.model"
@@ -12,9 +12,9 @@ export class Swap {
     @PrimaryColumn_()
     id!: string
 
-    @Index_()
+    @Index_("idx_swap_transaction_08544ea0")
     @ManyToOne_(() => Tx, {nullable: true})
-    transaction!: Tx
+    transaction!: Relation_<Tx>
 
     @StringColumn_({nullable: false})
     transactionId!: string
@@ -22,9 +22,9 @@ export class Swap {
     @DateTimeColumn_({nullable: false})
     timestamp!: Date
 
-    @Index_()
+    @Index_("idx_swap_pool_689d45a4")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     poolId!: string
@@ -32,16 +32,16 @@ export class Swap {
     @StringColumn_({nullable: false})
     token0Id!: string
 
-    @Index_()
+    @Index_("idx_swap_token0_675f4634")
     @ManyToOne_(() => Token, {nullable: true})
-    token0!: Token
+    token0!: Relation_<Token>
 
     @StringColumn_({nullable: false})
     token1Id!: string
 
-    @Index_()
+    @Index_("idx_swap_token1_bad45593")
     @ManyToOne_(() => Token, {nullable: true})
-    token1!: Token
+    token1!: Relation_<Token>
 
     @StringColumn_({nullable: false})
     sender!: string

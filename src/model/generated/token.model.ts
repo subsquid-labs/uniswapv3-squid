@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, IntColumn as IntColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, OneToMany as OneToMany_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, IntColumn as IntColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, OneToMany as OneToMany_, Relation as Relation_} from "@subsquid/typeorm-store"
 import {TokenDayData} from "./tokenDayData.model"
 
 @Entity_()
@@ -56,5 +56,5 @@ export class Token {
     whitelistPools!: (string)[]
 
     @OneToMany_(() => TokenDayData, e => e.token)
-    tokenDayData!: TokenDayData[]
+    tokenDayData!: Relation_<TokenDayData[]>
 }

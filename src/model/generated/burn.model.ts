@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, DateTimeColumn as DateTimeColumn_, BigIntColumn as BigIntColumn_, FloatColumn as FloatColumn_, IntColumn as IntColumn_} from "@subsquid/typeorm-store"
 import {Tx} from "./tx.model"
 import {Pool} from "./pool.model"
 import {Token} from "./token.model"
@@ -15,30 +15,30 @@ export class Burn {
     @StringColumn_({nullable: false})
     transactionId!: string
 
-    @Index_()
+    @Index_("idx_burn_transaction_b240081a")
     @ManyToOne_(() => Tx, {nullable: true})
-    transaction!: Tx
+    transaction!: Relation_<Tx>
 
     @StringColumn_({nullable: false})
     poolId!: string
 
-    @Index_()
+    @Index_("idx_burn_pool_964c3c91")
     @ManyToOne_(() => Pool, {nullable: true})
-    pool!: Pool
+    pool!: Relation_<Pool>
 
     @StringColumn_({nullable: false})
     token0Id!: string
 
-    @Index_()
+    @Index_("idx_burn_token0_a977219a")
     @ManyToOne_(() => Token, {nullable: true})
-    token0!: Token
+    token0!: Relation_<Token>
 
     @StringColumn_({nullable: false})
     token1Id!: string
 
-    @Index_()
+    @Index_("idx_burn_token1_a345a2cf")
     @ManyToOne_(() => Token, {nullable: true})
-    token1!: Token
+    token1!: Relation_<Token>
 
     @DateTimeColumn_({nullable: false})
     timestamp!: Date

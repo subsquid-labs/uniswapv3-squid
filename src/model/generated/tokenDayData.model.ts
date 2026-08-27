@@ -1,4 +1,4 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, FloatColumn as FloatColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, DateTimeColumn as DateTimeColumn_, StringColumn as StringColumn_, ManyToOne as ManyToOne_, Index as Index_, Relation as Relation_, FloatColumn as FloatColumn_, BigIntColumn as BigIntColumn_} from "@subsquid/typeorm-store"
 import {Token} from "./token.model"
 
 @Entity_()
@@ -16,9 +16,9 @@ export class TokenDayData {
     @StringColumn_({nullable: false})
     tokenId!: string
 
-    @Index_()
+    @Index_("idx_token_day_data_token_a3c16d52")
     @ManyToOne_(() => Token, {nullable: true})
-    token!: Token
+    token!: Relation_<Token>
 
     @FloatColumn_({nullable: false})
     volume!: number
@@ -34,6 +34,9 @@ export class TokenDayData {
 
     @FloatColumn_({nullable: false})
     totalValueLockedUSD!: number
+
+    @FloatColumn_({nullable: false})
+    tvlDelta!: number
 
     @FloatColumn_({nullable: false})
     priceUSD!: number
@@ -52,4 +55,10 @@ export class TokenDayData {
 
     @FloatColumn_({nullable: false})
     close!: number
+
+    @BigIntColumn_({nullable: true})
+    openOrder!: bigint | undefined | null
+
+    @BigIntColumn_({nullable: true})
+    closeOrder!: bigint | undefined | null
 }

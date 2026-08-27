@@ -1,5 +1,6 @@
 export * from "./factory.model"
 export * from "./bundle.model"
+export * from "./ethPrice.model"
 export * from "./token.model"
 export * from "./pool.model"
 export * from "./tick.model"

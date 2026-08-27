@@ -1,19 +1,17 @@
-import { DataHandlerContext, BlockData } from "@subsquid/evm-processor";
-import { BlockHandlerContext } from "./interfaces/interfaces";
 import * as ERC20 from "../abi/ERC20";
 import * as ERC20NameBytes from "../abi/ERC20NameBytes";
 import * as ERC20SymbolBytes from "../abi/ERC20SymbolBytes";
 import { Multicall } from "../abi/multicall";
 import { MULTICALL_ADDRESS } from "./constants";
+import { contractContext } from "./rpc";
 import { StaticTokenDefinition } from "./staticTokenDefinition";
 import { removeNullBytes } from "./tools";
-import { Store } from "@subsquid/typeorm-store";
 
 export async function fetchTokensSymbol(
-  ctx: BlockHandlerContext<Store>,
+  height: number,
   tokenAddresses: string[]
 ) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  const multicall = new Multicall(contractContext(height), MULTICALL_ADDRESS);
 
   const symbols = new Map<string, string>();
 
@@ -34,7 +32,7 @@ export async function fetchTokensSymbol(
       symbols.set(address, removeNullBytes(sym));
     } else {
       const value = StaticTokenDefinition.fromAddress(address)?.symbol;
-      if (value == null) ctx.log.warn(`Missing symbol for token ${address}`);
+      if (value == null) console.warn(`Missing symbol for token ${address}`);
       symbols.set(address, value || "unknown");
     }
   });
@@ -43,10 +41,10 @@ export async function fetchTokensSymbol(
 }
 
 export async function fetchTokensName(
-  ctx: BlockHandlerContext<Store>,
+  height: number,
   tokenAddresses: string[]
 ) {
-  const multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  const multicall = new Multicall(contractContext(height), MULTICALL_ADDRESS);
 
   const names = new Map<string, string>();
 
@@ -67,7 +65,7 @@ export async function fetchTokensName(
       names.set(address, removeNullBytes(name));
     } else {
       const value = StaticTokenDefinition.fromAddress(address)?.name;
-      if (value == null) ctx.log.warn(`Missing name for token ${address}`);
+      if (value == null) console.warn(`Missing name for token ${address}`);
       names.set(address, value || "unknown");
     }
   });
@@ -76,11 +74,10 @@ export async function fetchTokensName(
 }
 
 export async function fetchTokensTotalSupply(
-  ctx: BlockHandlerContext<Store>,
+  height: number,
   tokenAddresses: string[]
 ) {
-  //tokenAddresses = ["0x7F5c764cBc14f9669B88837ca1490cCa17c31607"];
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  let multicall = new Multicall(contractContext(height), MULTICALL_ADDRESS);
 
   let results = await multicall.tryAggregate(
     ERC20.functions.totalSupply,
@@ -97,10 +94,10 @@ export async function fetchTokensTotalSupply(
 }
 
 export async function fetchTokensDecimals(
-  ctx: BlockHandlerContext<Store>,
+  height: number,
   tokenAddresses: string[]
 ) {
-  let multicall = new Multicall(ctx, MULTICALL_ADDRESS);
+  let multicall = new Multicall(contractContext(height), MULTICALL_ADDRESS);
 
   let results = await multicall.tryAggregate(
     ERC20.functions.decimals,
