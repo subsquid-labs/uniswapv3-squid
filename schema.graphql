@@ -484,6 +484,12 @@ type UniswapDayData @entity {
   txCount: Int!
   # tvl in terms of USD
   tvlUSD: Float!
+  # Sum of every change this day's events made to the factory's ETH TVL. TVL is
+  # a stock, so a bucket cannot count it the way it counts txCount - but the
+  # change a bucket causes is a flow, which is order-independent and therefore
+  # safe to accumulate from any pass. Written at indexing time and consumed by
+  # `sqd finalize`, which prefix-sums it back into tvlUSD.
+  tvlETHDelta: Float!
 }
 
 # Data accumulated and condensed into day stats for each pool
@@ -646,6 +652,12 @@ type TokenDayData @entity {
   totalValueLocked: Float!
   # liquidity across all pools in derived USD
   totalValueLockedUSD: Float!
+  # Sum of every change this period's events made to the token's TVL, in token
+  # units. TVL is a stock, so a bucket cannot count it the way it counts volume
+  # - but the change a bucket causes is a flow, which is order-independent and
+  # therefore safe to accumulate from any pass. Written at indexing time and
+  # consumed by `sqd finalize`, which prefix-sums it back into totalValueLocked.
+  tvlDelta: Float!
   # price at end of period in USD
   priceUSD: Float!
   # fees in USD
@@ -686,6 +698,12 @@ type TokenHourData @entity {
   totalValueLocked: Float!
   # liquidity across all pools in derived USD
   totalValueLockedUSD: Float!
+  # Sum of every change this period's events made to the token's TVL, in token
+  # units. TVL is a stock, so a bucket cannot count it the way it counts volume
+  # - but the change a bucket causes is a flow, which is order-independent and
+  # therefore safe to accumulate from any pass. Written at indexing time and
+  # consumed by `sqd finalize`, which prefix-sums it back into totalValueLocked.
+  tvlDelta: Float!
   # price at end of period in USD
   priceUSD: Float!
   # fees in USD

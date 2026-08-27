@@ -36,6 +36,9 @@ export class TokenDayData {
     totalValueLockedUSD!: number
 
     @FloatColumn_({nullable: false})
+    tvlDelta!: number
+
+    @FloatColumn_({nullable: false})
     priceUSD!: number
 
     @FloatColumn_({nullable: false})

@@ -117,15 +117,17 @@ already written in order.
 
 ### What is approximate
 
-Everything keyed by pool is exact, because a pool lives in exactly one pass. So are the token
-buckets' `open`, `close`, `high`, `low`, and the volume and fee sums. One thing is not:
+Nothing, as of the finalize step below — but the reason each field is exact differs, and the
+distinction is what the rest of this section is about.
 
-The accumulators themselves are additive — `Factory.txCount` counts up, `Token.totalValueLocked`
-takes signed deltas — so their **final** values are right once every pass has finished, and so are
-the buckets' own `volume*`/`feesUSD`, which accumulate per bucket.
+Everything keyed by pool is exact because a pool lives in exactly one pass, and so are the token
+buckets' `open`, `close`, `high`, `low`. The accumulators themselves are additive —
+`Factory.txCount` counts up, `Token.totalValueLocked` takes signed deltas — so their **final**
+values are right once every pass has finished, and so are the buckets' own `volume*`/`feesUSD`,
+which accumulate per bucket.
 
-What is not additive is how a few buckets record a *level*: they assign the global accumulator
-rather than summing their own contributions.
+What is not additive is how a bucket can come to record a *level*: assigning the global accumulator
+rather than summing its own contributions.
 
 ```ts
 uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked  // counted, exact
@@ -142,18 +144,44 @@ merits: the schema calls it "number of transactions during period", so sampling 
 counter was the wrong quantity even in a single-pass sync, and counting is order-independent for
 free.
 
-What remains sampled is genuine levels, where counting is not an option because the field is a
-stock rather than a flow:
+Two fields are genuine levels, where counting is not an option because the field is a stock rather
+than a flow:
 
 - `UniswapDayData.tvlUSD`, which is global.
-- `TokenDayData`/`TokenHourData` `totalValueLocked*`, but **only for the ~22 whitelisted tokens**.
-  Every pool holding any other token lives in one pass, so that token's accumulator is complete and
-  chronological when its buckets sample it.
+- `TokenDayData`/`TokenHourData` `totalValueLocked*`, which only ever went wrong for the ~22
+  whitelisted tokens. Every pool holding any other token lives in one pass, so that token's
+  accumulator is complete and chronological when its buckets sample it.
 
-`PoolDayData`/`PoolHourData` sample `tvlUSD` the same way and are exact, because a pool's
-accumulator is written entirely by one pass, in order. Making the global and whitelisted-token
-levels exact means accumulating their per-bucket *deltas* during indexing and turning those into
-levels with a prefix sum once every pass has finished; this squid does not ship that step.
+#### Deltas plus a prefix sum
+
+A stock cannot be counted per bucket, but the *change* a bucket's events make to it can: a flow is
+order-independent no matter which pass sees it. So each bucket accumulates its own delta alongside
+the sampled level —
+
+```graphql
+UniswapDayData.tvlETHDelta   # sum of this day's changes to the factory's ETH TVL
+TokenDayData.tvlDelta        # sum of this bucket's changes to the token's TVL, in token units
+TokenHourData.tvlDelta
+```
+
+— written in `src/mappings/core.ts` next to the `factory.totalValueLockedETH` and
+`token.totalValueLocked` bookkeeping, as after-minus-before so the delta is whatever the handler
+actually did. Then `sqd finalize` (`src/tools/finalize.ts`) walks each series once every pass has
+finished and turns the deltas into levels with a prefix sum:
+
+- `UniswapDayData` by date: `tvlETH += tvlETHDelta`, and `tvlUSD = tvlETH ×` the ETH price at that
+  day's close, taken from the pricing pool's own `PoolDayData.close` and carried forward over days
+  it did not trade.
+- `TokenDayData`/`TokenHourData` per token, by date: `totalValueLocked += tvlDelta`, and
+  `totalValueLockedUSD = totalValueLocked × close`, that bucket's token price, which is exact
+  already.
+
+It reads only the deltas, so it is idempotent and can be re-run over the whole range at will.
+Strictly it is only needed below the cutoff: above it there is a single chronological phase whose
+accumulators are complete, so `head` samples correct levels by itself.
+
+`PoolDayData`/`PoolHourData` sample `tvlUSD` the same way and never needed any of this, because a
+pool's accumulator is written entirely by one pass, in order. Finalize does not touch them.
 
 ## PoolRegistry and forks
 
@@ -203,17 +231,21 @@ npm ci
 cp .env.example .env      # set RPC_ETH_HTTP
 sqd up                    # start Postgres
 sqd get-pools             # build assets/pools.json (cutoff + passes)
-sqd process               # run every pass in order, then follow the head
+sqd process               # every pass in order, then finalize, then follow the head
 sqd serve                 # GraphQL API on localhost:4350/graphql
 ```
 
-To run one phase at a time:
+To run one step at a time — the passes first, in order, then `finalize`, then `head`:
 
 ```bash
 sqd process:phase pass0
 sqd process:phase pass1
+sqd finalize              # prefix-sum the buckets' TVL deltas into levels
 sqd process:phase head
 ```
+
+`sqd finalize` has to come after the last pass and can be re-run at any point; the head phase does
+not need it and never ends, so it comes last.
 
 Environment variables:
 

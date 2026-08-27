@@ -29,4 +29,7 @@ export class UniswapDayData {
 
     @FloatColumn_({nullable: false})
     tvlUSD!: number
+
+    @FloatColumn_({nullable: false})
+    tvlETHDelta!: number
 }

@@ -269,6 +269,14 @@ function applyMint(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     const amountUSD =
         amount0 * (token0.derivedETH * bundle.ethPriceUSD) + amount1 * (token1.derivedETH * bundle.ethPriceUSD)
 
+    // Levels as they stand before this event, for the bucket TVL deltas
+    // assembled at the end of the handler. Each accumulator is touched in more
+    // than one place below, so the delta is read back off the accumulator
+    // rather than assumed to equal the event amount.
+    const poolTvlETHBefore = pool.totalValueLockedETH
+    const token0TvlBefore = token0.totalValueLocked
+    const token1TvlBefore = token1.totalValueLocked
+
     // reset tvl aggregates until new amounts calculated
     factory.totalValueLockedETH = factory.totalValueLockedETH - pool.totalValueLockedETH
 
@@ -304,10 +312,9 @@ function applyMint(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     factory.totalValueLockedETH = factory.totalValueLockedETH + pool.totalValueLockedETH
     factory.totalValueLockedUSD = factory.totalValueLockedETH * bundle.ethPriceUSD
 
-    token0.totalValueLocked = token0.totalValueLocked + amount0
+    // Re-price only: the amounts were already added above. Applying them a
+    // second time here double-counted every mint into Token.totalValueLocked.
     token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD
-
-    token1.totalValueLocked = token1.totalValueLocked + amount1
     token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD
 
     const transaction = getOrCreateTransaction(entities, event)
@@ -365,13 +372,20 @@ function applyMint(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     entities.set(upperTick)
 
     // Update volume metrics
-    updateUniswapDayData(entities, event.timestamp)
+    const uniswapDayData = updateUniswapDayData(entities, event.timestamp)
     const poolDayData = updatePoolDayData(entities, event.timestamp, pool.id)
     const poolHourData = updatePoolHourData(entities, event.timestamp, pool.id)
     const token0DayData = updateTokenDayData(entities, event, token0.id)
     const token0HourData = updateTokenHourData(entities, event, token0.id)
     const token1DayData = updateTokenDayData(entities, event, token1.id)
     const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    accumulateTvlDeltas(
+        {uniswapDayData, token0DayData, token0HourData, token1DayData, token1HourData},
+        pool.totalValueLockedETH - poolTvlETHBefore,
+        token0.totalValueLocked - token0TvlBefore,
+        token1.totalValueLocked - token1TvlBefore
+    )
 
     if (poolDayData && poolHourData) {
         poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD
@@ -414,6 +428,11 @@ function applyBurn(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     const amountUSD =
         amount0 * (token0.derivedETH * bundle.ethPriceUSD) + amount1 * (token1.derivedETH * bundle.ethPriceUSD)
 
+    // Levels as they stand before this event - see applyMint.
+    const poolTvlETHBefore = pool.totalValueLockedETH
+    const token0TvlBefore = token0.totalValueLocked
+    const token1TvlBefore = token1.totalValueLocked
+
     // reset tvl aggregates until new amounts calculated
     factory.totalValueLockedETH = factory.totalValueLockedETH - pool.totalValueLockedETH
 
@@ -451,10 +470,9 @@ function applyBurn(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     factory.totalValueLockedUSD = factory.totalValueLockedETH * bundle.ethPriceUSD
 
     // Update token TVL
-    token0.totalValueLocked = token0.totalValueLocked - amount0
+    // Re-price only: the amounts were already subtracted above. Applying them a
+    // second time here double-counted every burn out of Token.totalValueLocked.
     token0.totalValueLockedUSD = token0.totalValueLocked * token0.derivedETH * bundle.ethPriceUSD
-
-    token1.totalValueLocked = token1.totalValueLocked - amount1
     token1.totalValueLockedUSD = token1.totalValueLocked * token1.derivedETH * bundle.ethPriceUSD
 
     // burn entity
@@ -503,13 +521,20 @@ function applyBurn(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     entities.set(token1)
 
     // Update volume metrics
-    updateUniswapDayData(entities, event.timestamp)
+    const uniswapDayData = updateUniswapDayData(entities, event.timestamp)
     const poolDayData = updatePoolDayData(entities, event.timestamp, pool.id)
     const poolHourData = updatePoolHourData(entities, event.timestamp, pool.id)
     const token0DayData = updateTokenDayData(entities, event, token0.id)
     const token0HourData = updateTokenHourData(entities, event, token0.id)
     const token1DayData = updateTokenDayData(entities, event, token1.id)
     const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    accumulateTvlDeltas(
+        {uniswapDayData, token0DayData, token0HourData, token1DayData, token1HourData},
+        pool.totalValueLockedETH - poolTvlETHBefore,
+        token0.totalValueLocked - token0TvlBefore,
+        token1.totalValueLocked - token1TvlBefore
+    )
 
     if (poolDayData && poolHourData) {
         poolDayData.volumeUSD = poolDayData.volumeUSD + amountUSD
@@ -580,6 +605,11 @@ function applySwap(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     // reset aggregate tvl before individual pool tvl updates
     const currentPoolTvlETH = pool.totalValueLockedETH
     factory.totalValueLockedETH = factory.totalValueLockedETH - currentPoolTvlETH
+
+    // Token levels as they stand before this event - see applyMint. The pool's
+    // is `currentPoolTvlETH` just above.
+    const token0TvlBefore = token0.totalValueLocked
+    const token1TvlBefore = token1.totalValueLocked
 
     // pool volume
     pool.txCount++
@@ -658,6 +688,13 @@ function applySwap(entities: Entities, ethPrice: EthPriceSource, event: EventOf<
     const token0HourData = updateTokenHourData(entities, event, token0.id)
     const token1DayData = updateTokenDayData(entities, event, token1.id)
     const token1HourData = updateTokenHourData(entities, event, token1.id)
+
+    accumulateTvlDeltas(
+        {uniswapDayData, token0DayData, token0HourData, token1DayData, token1HourData},
+        pool.totalValueLockedETH - currentPoolTvlETH,
+        token0.totalValueLocked - token0TvlBefore,
+        token1.totalValueLocked - token1TvlBefore
+    )
 
     uniswapDayData.volumeETH = uniswapDayData.volumeETH + amountTotalETHTracked
     uniswapDayData.volumeUSD = uniswapDayData.volumeUSD + amountTotalUSDTracked
@@ -802,6 +839,37 @@ function getEthPerToken(entities: Entities, tokenId: string): number {
         }
     }
     return priceSoFar
+}
+
+/**
+ * Adds one event's TVL flows to the buckets that cover it.
+ *
+ * TVL is a stock, so a bucket cannot count it the way it counts `txCount`: the
+ * levels the buckets sample - `UniswapDayData.tvlUSD` and the token buckets'
+ * `totalValueLocked*` - are read off accumulators that the passes still to run
+ * have not contributed to yet, so they are incomplete at write time. What *is*
+ * order-independent is the change one event makes, which is a flow, so each
+ * bucket sums its own. `sqd finalize` prefix-sums those back into levels once
+ * every pass has finished; see src/tools/finalize.ts. Only ever accumulates -
+ * a pass must never overwrite what another pass added.
+ */
+function accumulateTvlDeltas(
+    buckets: {
+        uniswapDayData: UniswapDayData
+        token0DayData: TokenDayData
+        token0HourData: TokenHourData
+        token1DayData: TokenDayData
+        token1HourData: TokenHourData
+    },
+    factoryETHDelta: number,
+    token0Delta: number,
+    token1Delta: number
+): void {
+    buckets.uniswapDayData.tvlETHDelta = buckets.uniswapDayData.tvlETHDelta + factoryETHDelta
+    buckets.token0DayData.tvlDelta = buckets.token0DayData.tvlDelta + token0Delta
+    buckets.token0HourData.tvlDelta = buckets.token0HourData.tvlDelta + token0Delta
+    buckets.token1DayData.tvlDelta = buckets.token1DayData.tvlDelta + token1Delta
+    buckets.token1HourData.tvlDelta = buckets.token1HourData.tvlDelta + token1Delta
 }
 
 function updateUniswapDayData(entities: Entities, timestamp: number): UniswapDayData {
@@ -1096,7 +1164,7 @@ function updateTickDayData(entities: Entities, timestamp: number, id: string): T
     tickDayData.liquidityGross = tick.liquidityGross
     tickDayData.liquidityNet = tick.liquidityNet
     tickDayData.volumeToken0 = tick.volumeToken0
-    tickDayData.volumeToken1 = tick.volumeToken0
+    tickDayData.volumeToken1 = tick.volumeToken1
     tickDayData.volumeUSD = tick.volumeUSD
     tickDayData.feesUSD = tick.feesUSD
     tickDayData.feeGrowthOutside0X128 = tick.feeGrowthOutside0X128

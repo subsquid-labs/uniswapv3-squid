@@ -85,6 +85,11 @@
         "description": "Open a local browser window",
         "cmd": ["npx", "--yes", "opener"]
       },
+      "finalize": {
+        "description": "Turn the buckets' TVL deltas into levels; run once every pass has finished",
+        "deps": ["build"],
+        "cmd": ["node", "--require=dotenv/config", "lib/tools/finalize.js"]
+      },
       "get-pools": {
         "description": "Rebuild assets/pools.json: pick a cutoff and split the pools below it into passes",
         "deps": ["build"],

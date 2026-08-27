@@ -24,6 +24,7 @@ export function createUniswapDayData(factoryId: string, dayIndex: number) {
     data.feesUSD = 0
     data.tvlUSD = 0
     data.txCount = 0
+    data.tvlETHDelta = 0
 
     return data
 }
@@ -93,6 +94,7 @@ export function createTokenDayData(tokenId: string, dayIndex: number) {
     data.priceUSD = 0
     data.totalValueLocked = 0
     data.totalValueLockedUSD = 0
+    data.tvlDelta = 0
 
     return data
 }
@@ -112,6 +114,7 @@ export function createTokenHourData(tokenId: string, hourIndex: number) {
     data.priceUSD = 0
     data.totalValueLocked = 0
     data.totalValueLockedUSD = 0
+    data.tvlDelta = 0
 
     return data
 }
